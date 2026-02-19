@@ -21,6 +21,9 @@ from bot.handlers import (
     handle_stop,
     handle_kick,
     handle_clear,
+    handle_metadata,
+    handle_metadata_upload,
+    _pending_metadata,
     _extract_user_metadata,
 )
 from bot.callbacks import handle_callback_query
@@ -77,6 +80,10 @@ async def process_update(rbac: RBAC, update: dict) -> None:
         await handle_kick(rbac, message, user_id)
     elif text.startswith("/clear"):
         await handle_clear(message, user_id)
+    elif text.startswith("/metadata"):
+        await handle_metadata(rbac, message, user_id)
+    elif user_id in _pending_metadata and (message.get("photo") or message.get("document")):
+        await handle_metadata_upload(rbac, message, user_id)
     else:
         logger.debug("No command matched for update %s", update_id)
 

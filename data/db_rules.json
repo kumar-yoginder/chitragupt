@@ -1,9 +1,9 @@
 {
   "roles": [
-    {"level": 0,   "name": "Guest",      "actions": ["view_help"]},
-    {"level": 10,  "name": "Member",     "actions": ["view_help"]},
-    {"level": 50,  "name": "Moderator",  "actions": ["view_help", "kick_user", "delete_msg"]},
-    {"level": 80,  "name": "Admin",      "actions": ["view_help", "kick_user", "delete_msg", "ban_user", "mute_user", "manage_users"]},
+    {"level": 0,   "name": "Guest",      "actions": ["view_help", "extract_metadata"]},
+    {"level": 10,  "name": "Member",     "actions": ["view_help", "extract_metadata"]},
+    {"level": 50,  "name": "Moderator",  "actions": ["view_help", "kick_user", "delete_msg", "extract_metadata"]},
+    {"level": 80,  "name": "Admin",      "actions": ["view_help", "kick_user", "delete_msg", "ban_user", "mute_user", "manage_users", "extract_metadata"]},
     {"level": 100, "name": "SuperAdmin", "actions": ["*"]}
   ]
 }

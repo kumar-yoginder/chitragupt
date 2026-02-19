@@ -74,6 +74,7 @@ async def _handle_command_callback(
         handle_stop,
         handle_kick,
         handle_clear,
+        handle_metadata,
     )
 
     message = _build_synthetic_message(callback_query, command)
@@ -95,6 +96,8 @@ async def _handle_command_callback(
         await send_message(chat_id, "Usage: /kick <user_id>\nPlease type the command with the target user ID.")
     elif command == "/clear":
         await handle_clear(message, user_id)
+    elif command == "/metadata":
+        await handle_metadata(rbac, message, user_id)
     else:
         logger.debug("No handler mapped for command callback '%s'", command)
         await send_message(chat_id, f"⚠️ Unknown command: {command}")

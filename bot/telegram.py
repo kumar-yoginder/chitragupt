@@ -43,13 +43,21 @@ async def get_updates(offset: int | None = None) -> dict:
         return {"ok": False, "result": []}
 
 
-async def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> None:
+async def send_message(
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+    parse_mode: str | None = None,
+) -> None:
     """Send a text message to a Telegram chat.
 
-    Optionally include an InlineKeyboardMarkup via *reply_markup*.
+    Optionally include an InlineKeyboardMarkup via *reply_markup* and/or
+    a *parse_mode* (``"Markdown"``, ``"MarkdownV2"``, ``"HTML"``).
     """
     logger.debug("Sending message to chat %s: %s", chat_id, text[:80])
     payload: dict = {"chat_id": chat_id, "text": text}
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     try:
