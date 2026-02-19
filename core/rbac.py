@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -6,6 +7,9 @@ import config as _config
 from core.logger import ChitraguptLogger
 
 logger = ChitraguptLogger.get_logger()
+
+# Keys stored per-user beyond 'name' and 'level'.
+_USER_META_KEYS = ("username", "first_name", "last_name", "language_code", "is_premium", "is_special")
 
 
 class RBAC:
@@ -45,6 +49,7 @@ class RBAC:
 
         logger.info("Loaded %d user entries", len(self.users))
         self.users_path = users_path
+        self._lock = asyncio.Lock()
 
     def get_user_level(self, user_id: int) -> int:
         """Return the numeric role level for user_id, defaulting to 0 (Guest)."""
@@ -86,23 +91,40 @@ class RBAC:
             logger.warning("Permission DENIED: user %s (level %d) -> '%s'", user_id, level, action_slug)
         return granted
 
-    def set_user_level(self, user_id: int, level: int, name: str | None = None) -> None:
-        """Update (or create) a user entry and persist it to db_users.json atomically."""
+    async def set_user_level(
+        self,
+        user_id: int,
+        level: int,
+        name: str | None = None,
+        **metadata: object,
+    ) -> None:
+        """Update (or create) a user entry and persist it to db_users.json atomically.
+
+        Accepts optional rich metadata keys: *username*, *first_name*,
+        *last_name*, *language_code*, *is_premium*, *is_special*.
+        """
         key = str(user_id)
         if key not in self.users:
-            self.users[key] = {
+            entry: dict = {
                 "name": name or str(user_id),
                 "level": level,
             }
+            for mk in _USER_META_KEYS:
+                if mk in metadata and metadata[mk] is not None:
+                    entry[mk] = metadata[mk]
+            self.users[key] = entry
             logger.info("Created new user entry: user_id=%s, level=%d, name=%s", user_id, level, name)
         else:
             old_level = self.users[key].get("level")
             self.users[key]["level"] = level
             if name:
                 self.users[key]["name"] = name
+            for mk in _USER_META_KEYS:
+                if mk in metadata and metadata[mk] is not None:
+                    self.users[key][mk] = metadata[mk]
             logger.info("Updated user %s: level %s -> %d", user_id, old_level, level)
 
-        self._save_users()
+        await self._save_users()
 
     def get_role_name(self, user_id: int) -> str:
         """Return the human-readable role name for *user_id*."""
@@ -132,12 +154,14 @@ class RBAC:
         logger.debug("Found %d SuperAdmin(s)", len(admins))
         return admins
 
-    def sync_super_admin(self, user_id: int, name: str) -> None:
+    async def sync_super_admin(self, user_id: int, name: str, **metadata: object) -> None:
         """Ensure *user_id* is stored in db_users.json at level 100.
 
         Called on every interaction for env-listed SUPER_ADMINS so the
-        database always mirrors the current Telegram profile.  Uses the
-        existing atomic-write pattern.
+        database always mirrors the current Telegram profile.  Accepts
+        optional rich metadata keys (*username*, *first_name*, *last_name*,
+        *language_code*, *is_premium*, *is_special*).  Uses the existing
+        atomic-write pattern.
         """
         key = str(user_id)
         entry = self.users.get(key)
@@ -145,7 +169,11 @@ class RBAC:
         needs_update = False
         if entry is None:
             # Brand-new super admin — insert at level 100.
-            self.users[key] = {"name": name, "level": 100}
+            new_entry: dict = {"name": name, "level": 100}
+            for mk in _USER_META_KEYS:
+                if mk in metadata and metadata[mk] is not None:
+                    new_entry[mk] = metadata[mk]
+            self.users[key] = new_entry
             needs_update = True
             logger.info(
                 "sync_super_admin: created new SuperAdmin entry for user %s (%s)",
@@ -166,12 +194,21 @@ class RBAC:
                     "sync_super_admin: updated display name for user %s to '%s'",
                     user_id, name,
                 )
+            for mk in _USER_META_KEYS:
+                if mk in metadata and metadata[mk] is not None and entry.get(mk) != metadata[mk]:
+                    entry[mk] = metadata[mk]
+                    needs_update = True
 
         if needs_update:
-            self._save_users()
+            await self._save_users()
 
-    def _save_users(self) -> None:
-        """Write users to disk atomically to prevent file corruption."""
+    async def _save_users(self) -> None:
+        """Write users to disk atomically, guarded by an asyncio lock."""
+        async with self._lock:
+            await asyncio.to_thread(self._save_users_sync)
+
+    def _save_users_sync(self) -> None:
+        """Synchronous atomic write — called inside a thread by ``_save_users``."""
         dir_name = os.path.dirname(self.users_path) or "."
         try:
             with tempfile.NamedTemporaryFile(

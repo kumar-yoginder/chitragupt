@@ -1,10 +1,12 @@
 """Update dispatcher and main polling loop.
 
 Routes each incoming Telegram update to the appropriate handler in
-:mod:`bot.handlers` or :mod:`bot.callbacks`.
+:mod:`bot.handlers` or :mod:`bot.callbacks`.  The loop uses ``asyncio``
+to process updates in parallel — long-running tasks (API calls, DB writes)
+never block the bot from receiving new messages.
 """
 
-import time
+import asyncio
 
 import config
 from config import BOT_TOKEN
@@ -18,13 +20,14 @@ from bot.handlers import (
     handle_status,
     handle_stop,
     handle_kick,
+    _extract_user_metadata,
 )
 from bot.callbacks import handle_callback_query
 
 logger = ChitraguptLogger.get_logger()
 
 
-def process_update(rbac: RBAC, update: dict) -> None:
+async def process_update(rbac: RBAC, update: dict) -> None:
     """Dispatch a single Telegram update to the appropriate handler."""
     update_id = update.get("update_id")
 
@@ -32,7 +35,7 @@ def process_update(rbac: RBAC, update: dict) -> None:
     callback_query = update.get("callback_query")
     if callback_query:
         logger.debug("Processing callback_query in update %s", update_id)
-        handle_callback_query(rbac, callback_query)
+        await handle_callback_query(rbac, callback_query)
         return
 
     message = (
@@ -55,27 +58,31 @@ def process_update(rbac: RBAC, update: dict) -> None:
     if user_id in super_admins:
         from_user = message.get("from") or message.get("sender_chat") or {}
         display_name = from_user.get("first_name", str(user_id))
-        rbac.sync_super_admin(user_id, display_name)
+        meta = _extract_user_metadata(from_user)
+        await rbac.sync_super_admin(user_id, display_name, **meta)
 
     text = message.get("text", "")
     logger.debug("Processing update %s from user %s: %s", update_id, user_id, text[:80])
 
     if text.startswith("/start"):
-        handle_start(rbac, message, user_id)
+        await handle_start(rbac, message, user_id)
     elif text.startswith("/help"):
-        handle_help(rbac, message, user_id)
+        await handle_help(rbac, message, user_id)
     elif text.startswith("/status"):
-        handle_status(rbac, message, user_id)
+        await handle_status(rbac, message, user_id)
     elif text.startswith("/stop") or text.startswith("/exit"):
-        handle_stop(message, user_id)
+        await handle_stop(message, user_id)
     elif text.startswith("/kick"):
-        handle_kick(rbac, message, user_id)
+        await handle_kick(rbac, message, user_id)
     else:
         logger.debug("No command matched for update %s", update_id)
 
 
-def run() -> None:
-    """Start the long-polling loop.
+async def run() -> None:
+    """Start the async long-polling loop.
+
+    Each update is spawned as an independent :func:`asyncio.create_task` so
+    the loop immediately proceeds to fetch the next batch.
 
     Raises:
         EnvironmentError: If ``BOT_TOKEN`` is not set.
@@ -86,17 +93,17 @@ def run() -> None:
     rbac = RBAC()
     offset: int | None = None
 
-    logger.info("Chitragupt bot is running. Polling for updates...")
+    logger.info("Chitragupt bot is running. Polling for updates (async)...")
     while True:
-        data = get_updates(offset)
+        data = await get_updates(offset)
         if not data.get("ok"):
             logger.warning("getUpdates returned ok=false, retrying in 5 s")
-            time.sleep(5)
+            await asyncio.sleep(5)
             continue
 
         updates = data.get("result", [])
         if updates:
             logger.debug("Received %d update(s)", len(updates))
         for update in updates:
-            process_update(rbac, update)
+            asyncio.create_task(process_update(rbac, update))
             offset = update["update_id"] + 1
