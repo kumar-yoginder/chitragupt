@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 
+import config as _config
 from core.logger import ChitraguptLogger
 
 logger = ChitraguptLogger.get_logger()
@@ -58,9 +59,20 @@ class RBAC:
     def has_permission(self, user_id: int, action_slug: str) -> bool:
         """Return True if user_id's role level permits action_slug.
 
-        A level whose actions list contains ``"*"`` grants all permissions
-        (SuperAdmin wildcard).
+        If the user_id appears in the ``SUPER_ADMINS`` environment list the
+        check short-circuits to ``True`` immediately.  Otherwise a level whose
+        actions list contains ``"*"`` grants all permissions (SuperAdmin
+        wildcard).
         """
+        # Global privilege injection — env-level super-admins bypass everything.
+        super_admins: list[int] = getattr(_config, "SUPER_ADMINS", [])
+        if user_id in super_admins:
+            logger.info(
+                "Permission GRANTED (env SUPER_ADMIN bypass): user %s -> '%s'",
+                user_id, action_slug,
+            )
+            return True
+
         level = self.get_user_level(user_id)
         role = self._rules_by_level.get(level)
         if role is None:
@@ -119,6 +131,44 @@ class RBAC:
                     logger.warning("Invalid user_id key in db_users: %s", uid_str)
         logger.debug("Found %d SuperAdmin(s)", len(admins))
         return admins
+
+    def sync_super_admin(self, user_id: int, name: str) -> None:
+        """Ensure *user_id* is stored in db_users.json at level 100.
+
+        Called on every interaction for env-listed SUPER_ADMINS so the
+        database always mirrors the current Telegram profile.  Uses the
+        existing atomic-write pattern.
+        """
+        key = str(user_id)
+        entry = self.users.get(key)
+
+        needs_update = False
+        if entry is None:
+            # Brand-new super admin — insert at level 100.
+            self.users[key] = {"name": name, "level": 100}
+            needs_update = True
+            logger.info(
+                "sync_super_admin: created new SuperAdmin entry for user %s (%s)",
+                user_id, name,
+            )
+        else:
+            if entry.get("level") != 100:
+                entry["level"] = 100
+                needs_update = True
+                logger.info(
+                    "sync_super_admin: promoted user %s (%s) to level 100",
+                    user_id, name,
+                )
+            if entry.get("name") != name:
+                entry["name"] = name
+                needs_update = True
+                logger.info(
+                    "sync_super_admin: updated display name for user %s to '%s'",
+                    user_id, name,
+                )
+
+        if needs_update:
+            self._save_users()
 
     def _save_users(self) -> None:
         """Write users to disk atomically to prevent file corruption."""

@@ -6,6 +6,7 @@ Routes each incoming Telegram update to the appropriate handler in
 
 import time
 
+import config
 from config import BOT_TOKEN
 from core.identity import get_identity
 from core.logger import ChitraguptLogger
@@ -48,6 +49,13 @@ def process_update(rbac: RBAC, update: dict) -> None:
     if user_id is None:
         logger.debug("Update %s — could not resolve identity, skipping", update_id)
         return
+
+    # ── SUPER_ADMIN metadata sync ────────────────────────────────────────
+    super_admins: list[int] = getattr(config, "SUPER_ADMINS", [])
+    if user_id in super_admins:
+        from_user = message.get("from") or message.get("sender_chat") or {}
+        display_name = from_user.get("first_name", str(user_id))
+        rbac.sync_super_admin(user_id, display_name)
 
     text = message.get("text", "")
     logger.debug("Processing update %s from user %s: %s", update_id, user_id, text[:80])
