@@ -1,12 +1,10 @@
-import os
 import time
 
 import requests
 
-from chitragupt_iam import ChitraguptIAM
-
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN or ''}"
+from config import BOT_TOKEN, BASE_URL
+from core.identity import get_identity
+from core.rbac import RBAC
 
 
 def get_updates(offset=None):
@@ -15,7 +13,7 @@ def get_updates(offset=None):
     if offset is not None:
         params["offset"] = offset
     try:
-        response = requests.get(f"{BASE_URL}/getUpdates", params=params, timeout=40)
+        response = requests.get(f"{BASE_URL}/getUpdates", params=params, timeout=35)
         return response.json()
     except requests.RequestException as exc:
         print(f"[getUpdates error] {exc}")
@@ -34,57 +32,68 @@ def send_message(chat_id, text):
         print(f"[sendMessage error] {exc}")
 
 
-def handle_promote(iam, message, entity_id):
-    """Handle the /promote command (SuperAdmin only).
+def handle_kick(rbac, message, user_id):
+    """Handle the /kick command.
 
-    Usage: /promote <user_id> <level>
+    Usage: /kick <user_id>
+    Requires the 'kick' action permission.
     """
     chat_id = message["chat"]["id"]
 
-    if not iam.can_perform(entity_id, "promote"):
-        send_message(chat_id, "⛔ Only a SuperAdmin (Level 100) can promote users.")
+    if not rbac.has_permission(user_id, "kick"):
+        send_message(chat_id, "⛔ You do not have permission to kick users.")
         return
 
     parts = message.get("text", "").split()
-    if len(parts) < 3:
-        send_message(chat_id, "Usage: /promote <user_id> <level>")
+    if len(parts) < 2:
+        send_message(chat_id, "Usage: /kick <user_id>")
         return
 
     try:
         target_id = int(parts[1])
-        new_level = int(parts[2])
     except ValueError:
-        send_message(chat_id, "❌ Invalid arguments. user_id and level must be integers.")
+        send_message(chat_id, "❌ Invalid user_id. It must be an integer.")
         return
 
-    if new_level >= 100:
-        send_message(chat_id, "❌ Cannot promote to SuperAdmin level (100) or above.")
+    try:
+        response = requests.post(
+            f"{BASE_URL}/kickChatMember",
+            json={"chat_id": chat_id, "user_id": target_id},
+            timeout=10,
+        )
+        result = response.json()
+    except requests.RequestException as exc:
+        print(f"[kickChatMember error] {exc}")
+        send_message(chat_id, "❌ Failed to reach Telegram API.")
         return
 
-    iam.update_entity_level(target_id, new_level)
-    send_message(chat_id, f"✅ Entity {target_id} promoted to level {new_level}.")
+    if result.get("ok"):
+        send_message(chat_id, f"✅ User {target_id} has been kicked.")
+    else:
+        description = result.get("description", "Unknown error")
+        send_message(chat_id, f"❌ Could not kick user: {description}")
 
 
-def process_update(iam, update):
+def process_update(rbac, update):
     """Dispatch a single Telegram update to the appropriate handler."""
     message = update.get("message") or update.get("edited_message")
     if not message:
         return
 
-    entity_id = iam.identify_entity(update)
-    if entity_id is None:
+    user_id = get_identity(update)
+    if user_id is None:
         return
 
     text = message.get("text", "")
-    if text.startswith("/promote"):
-        handle_promote(iam, message, entity_id)
+    if text.startswith("/kick"):
+        handle_kick(rbac, message, user_id)
 
 
 def main():
     if not BOT_TOKEN:
         raise EnvironmentError("BOT_TOKEN environment variable is not set or is empty.")
 
-    iam = ChitraguptIAM()
+    rbac = RBAC()
     offset = None
 
     print("Chitragupt bot is running. Polling for updates...")
@@ -95,7 +104,7 @@ def main():
             continue
 
         for update in data.get("result", []):
-            process_update(iam, update)
+            process_update(rbac, update)
             offset = update["update_id"] + 1
 
 
