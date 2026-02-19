@@ -9,7 +9,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from client import ChitraguptClient, APIException
+from sdk.client import ChitraguptClient
+from sdk.exceptions import APIException
 
 
 # ── APIException ─────────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ class TestClientInit:
 class TestPostHelper:
     """Validate the internal _post method."""
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_success(self, mock_post: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.ok = True
@@ -71,7 +72,7 @@ class TestPostHelper:
         assert result == {"ok": True, "result": {}}
         mock_post.assert_called_once()
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_api_error_raises(self, mock_post: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.ok = False
@@ -84,7 +85,7 @@ class TestPostHelper:
             c._post("getMe")
         assert exc_info.value.status_code == 401
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_json_decode_failure(self, mock_post: MagicMock) -> None:
         """If the response body is not JSON, body defaults to {}."""
         mock_resp = MagicMock()
@@ -97,7 +98,7 @@ class TestPostHelper:
         result = c._post("getMe")
         assert result == {}
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_network_error_propagates(self, mock_post: MagicMock) -> None:
         import requests as req_lib
 
@@ -114,7 +115,7 @@ class TestPostHelper:
 class TestEndpointMethods:
     """Spot-check selected endpoint wrapper methods."""
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_get_me(self, mock_post: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.ok = True
@@ -128,7 +129,7 @@ class TestEndpointMethods:
         result = c.get_me()
         assert result == {"ok": True, "result": {"id": 1, "is_bot": True, "first_name": "Bot"}}
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_send_message(self, mock_post: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.ok = True
@@ -145,7 +146,7 @@ class TestEndpointMethods:
         assert payload["chat_id"] == 42
         assert payload["text"] == "hello"
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_kick_chat_member(self, mock_post: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.ok = True
@@ -156,7 +157,7 @@ class TestEndpointMethods:
         result = c.kick_chat_member(chat_id=-1001234, user_id=42)
         assert result["ok"] is True
 
-    @patch("client.requests.post")
+    @patch("sdk.client.requests.post")
     def test_get_updates_with_defaults(self, mock_post: MagicMock) -> None:
         mock_resp = MagicMock()
         mock_resp.ok = True

@@ -9,18 +9,96 @@ Chitragupt is an Identity & Access Management (IAM) bot for Telegram.
 Phase 1 uses a lightweight stack: Python `requests` (no frameworks) and JSON flat-files for persistence.
 
 # Project Structure
+
+> **Ignored directories:** `__pycache__/` and `.pytest_cache/` are build/test artifacts.
+> **Always ignore them** when generating code, interpreting the project tree, or resolving imports.
+> Never commit them to version control.
+
 ```
 chitragupt/
-├── config.py               # Loads BOT_TOKEN and BASE_URL from environment
-├── main.py                 # Entry point: long-polling loop, update dispatch, command handlers
-├── core/
+├── main.py                     # Thin entry point — delegates to bot.dispatcher.run()
+├── config.py                   # Loads BOT_TOKEN and BASE_URL from environment via python-dotenv
+├── requirements.txt            # Python dependencies
+├── swagger.yaml                # OpenAPI spec (Telegram Bot API) — source of truth for SDK
+│
+├── bot/                        # Entry point & Telegram-specific logic
 │   ├── __init__.py
-│   ├── identity.py         # get_identity(): resolves the acting entity from a Telegram update
-│   └── rbac.py             # RBAC class: permission checks, user level management, persistence
-└── data/
-    ├── db_rules.json       # Role definitions: levels and allowed action slugs
-    └── db_users.json       # User registry: maps user_id (str) → { name, level }
+│   ├── telegram.py             # Low-level Telegram helpers (get_updates, send_message, answer_callback_query)
+│   ├── handlers.py             # Slash-command handlers (/start, /help, /status, /kick, /stop, /exit)
+│   ├── callbacks.py            # Inline-keyboard callback query handlers (approval flow)
+│   └── dispatcher.py           # process_update() routing + run() polling loop
+│
+├── core/                       # The "Brain" — framework-agnostic IAM engine
+│   ├── __init__.py
+│   ├── identity.py             # get_identity(): resolves the acting entity from a Telegram update
+│   ├── logger.py               # ChitraguptLogger: Singleton JSON logger (console + rotating file)
+│   └── rbac.py                 # RBAC class: JSON-based permission checks, user level management, persistence
+│
+├── sdk/                        # OOP implementation from the Swagger spec
+│   ├── __init__.py
+│   ├── models.py               # Pydantic (BaseModel) data models for every API schema
+│   ├── client.py               # ChitraguptClient: OOP service layer wrapping all API endpoints
+│   └── exceptions.py           # APIException base class for non-2xx responses
+│
+├── data/                       # Persistence layer (JSON flat-files)
+│   ├── db_rules.json           # Role definitions: levels and allowed action slugs
+│   └── db_users.json           # User registry: maps user_id (str) → { name, level }
+│
+├── logs/                       # ChitraguptLogger rotating log files (gitignored)
+│   └── chitragupt.log          # Rotating JSON log (5 MB × 5 backups)
+│
+└── tests/                      # Pytest test suite — mirrors bot/ and core/ structure
+    ├── __init__.py
+    ├── test_client.py           # Tests for sdk/client.py and sdk/exceptions.py
+    ├── test_handlers.py         # Tests for bot/handlers.py, bot/callbacks.py, bot/dispatcher.py
+    └── test_models.py           # Tests for sdk/models.py
 ```
+
+## Directory Responsibilities
+
+| Directory | Role | May import from | Must **never** contain |
+|-----------|------|-----------------|------------------------|
+| `bot/`    | Entry point & Telegram-specific logic (polling, command handlers, callback handlers) | `core/`, `config` | Raw dictionary parsing of Telegram payloads — use `sdk/` models instead. No RBAC logic; delegate to `core.rbac`. |
+| `core/`   | The **Brain** of Chitragupt — entity resolution (`identity.py`), JSON-based permission logic (`rbac.py`), logging (`logger.py`) | stdlib only + `core.logger` | **No Telegram API calls.** No imports from `bot/` or `sdk/`. No HTTP requests. Only pure IAM logic. |
+| `sdk/`    | OOP implementation of Pydantic models and the `ChitraguptClient` service layer, derived from `swagger.yaml` | `sdk/` only (fully self-contained) | No business logic, no RBAC checks, no handler code. This package is a generated API wrapper — nothing else. |
+| `data/`   | Persistence layer — JSON flat-file storage | — (never imported; read/written only by `core.rbac`) | No Python files. Only `db_rules.json` and `db_users.json`. No temporary files (atomic writes use `tempfile` + `os.replace`). |
+| `logs/`   | Destination for `ChitraguptLogger` rotating files | — (never imported; written only by `core.logger`) | No Python files. Only `chitragupt.log` and its rotated backups. Entire directory is gitignored. |
+| `tests/`  | Pytest test suite mirroring `bot/`, `core/`, and `sdk/` | everything | No application code. No fixtures that mutate `data/` files on disk. |
+
+## Boundary Rules
+
+### Import Restrictions
+```
+core/  ──✗──▶  bot/       (NEVER: core must not know about the bot layer)
+core/  ──✗──▶  sdk/       (NEVER: core must not depend on generated SDK)
+bot/   ──✓──▶  core/      (OK: handlers use RBAC, identity, logger)
+bot/   ──✓──▶  config     (OK: needs BOT_TOKEN / BASE_URL)
+sdk/   ──✗──▶  bot/       (NEVER: SDK is self-contained)
+sdk/   ──✗──▶  core/      (NEVER: SDK is self-contained)
+```
+
+### Isolation
+- `sdk/` Pydantic models and `ChitraguptClient` should be consumed by `bot/` to handle
+  structured data, keeping `main.py` free of any raw dictionary parsing.
+- `main.py` is a **thin entry point only** — it must contain no logic beyond
+  `from bot.dispatcher import run` and `run()`.
+
+### Cleanup — Ignored Artifacts
+When generating code, analyzing the project, or interpreting directory listings,
+**always disregard** these directories:
+- `__pycache__/` — bytecode cache (created automatically by Python)
+- `.pytest_cache/` — pytest runtime cache
+
+These directories must **never** appear in import paths, structure diagrams, or generated code.
+
+### Anti-Patterns (God Object Prevention)
+| Violation | Rule |
+|-----------|------|
+| A single file in `bot/` that handles commands, callbacks, polling, **and** Telegram API calls | Split into `telegram.py` (API), `handlers.py` (commands), `callbacks.py` (buttons), `dispatcher.py` (routing + loop) |
+| `core/rbac.py` making HTTP calls to Telegram | `core/` must be pure logic — move API calls to `bot/` |
+| `sdk/client.py` containing permission checks or handler routing | `sdk/` is a generated wrapper only — business logic belongs in `bot/` or `core/` |
+| `main.py` containing handler functions or raw dict parsing | `main.py` delegates exclusively to `bot.dispatcher.run()` |
+| Any `.py` file inside `data/` or `logs/` | These are storage-only directories — no executable code |
 
 # Architectural Patterns
 
@@ -39,9 +117,30 @@ who is acting on any update. It checks, in order:
 > `is_special: true` on any entry whose identity came from `sender_chat`.
 
 ## Update Types
-`process_update()` in `main.py` resolves a message from the following update fields, in priority order:
+`process_update()` in `bot/dispatcher.py` resolves a message from the following update fields,
+in priority order:
 `message` → `edited_message` → `channel_post` → `edited_channel_post`.
 Always use this order when extracting the message object from an update dict.
+
+## Bot Application Layer (`bot/`)
+
+### `bot/telegram.py` — Telegram API Helpers
+Low-level wrappers: `get_updates()`, `send_message()`, `answer_callback_query()`.
+All outbound calls go through this module — handlers never call `requests` directly
+(except `handle_kick` which calls the `kickChatMember` endpoint directly).
+
+### `bot/handlers.py` — Command Handlers
+One function per slash-command (`handle_start`, `handle_help`, `handle_status`,
+`handle_stop`, `handle_kick`). Each checks permissions via `rbac.has_permission()`
+before executing any privileged action.
+
+### `bot/callbacks.py` — Callback Query Handlers
+Processes inline-keyboard button presses (admin approval/rejection flow).
+
+### `bot/dispatcher.py` — Update Router + Polling Loop
+- `process_update(rbac, update)` — routes each update to the correct handler.
+- `run()` — the main polling loop (long-polling via `get_updates`).
+- `main.py` simply calls `bot.dispatcher.run()`.
 
 ## Permission Model: Action-Slug RBAC (`core/rbac.py`)
 
@@ -53,7 +152,7 @@ permitted for the user's level in `db_rules.json`.
 | Level | Role Name  | Permitted Actions                                          |
 |-------|------------|------------------------------------------------------------|
 | 100   | SuperAdmin | `*` (wildcard — all actions)                               |
-| 80    | Admin      | `view_help`, `kick_user`, `delete_msg`, `ban_user`, `mute_user` |
+| 80    | Admin      | `view_help`, `kick_user`, `delete_msg`, `ban_user`, `mute_user`, `manage_users` |
 | 50    | Moderator  | `view_help`, `kick_user`, `delete_msg`                     |
 | 10    | Member     | `view_help`                                                |
 | 0     | Guest      | `view_help` (default for unknown users)                    |
@@ -64,6 +163,9 @@ permitted for the user's level in `db_rules.json`.
   if the user's role permits `action_slug`, or if the role has the `"*"` wildcard.
 - `set_user_level(user_id: int, level: int, name: str | None = None) -> None` — upserts a user
   entry and atomically persists `db_users.json`.
+- `get_role_name(user_id: int) -> str` — human-readable role name.
+- `get_user_actions(user_id: int) -> list[str]` — action slugs for the user's level.
+- `get_superadmins() -> list[int]` — all user IDs at level 100.
 
 ### Permission Gate Rule
 Every administrative command handler **must** call `rbac.has_permission(user_id, action_slug)`
@@ -73,6 +175,29 @@ if not rbac.has_permission(user_id, "kick_user"):
     send_message(chat_id, "⛔ You do not have permission to kick users.")
     return
 ```
+
+## SDK Layer (`sdk/`)
+
+### `sdk/models.py`
+Pydantic `BaseModel` classes generated from `swagger.yaml` `components/schemas`.
+Use strict type hints (`Optional`, `List`, `Dict`, `Union`) and `Field(alias=...)` for
+Telegram's reserved keywords (e.g. `from` → `from_field`).
+
+### `sdk/client.py`
+`ChitraguptClient` — one method per API endpoint. Accepts/returns Pydantic models.
+Raises `sdk.exceptions.APIException` for non-2xx responses.
+
+### `sdk/exceptions.py`
+`APIException(status_code, response_body)` — base exception with HTTP status code and
+parsed error body.
+
+## Logging (`core/logger.py`)
+- **Singleton** `ChitraguptLogger` with `get_logger()` static method.
+- **Dual handlers:** `StreamHandler` (console) + `RotatingFileHandler` (`logs/chitragupt.log`).
+- **JSON format:** Every log line is a JSON object with keys: `timestamp`, `level`, `logger`,
+  `message`, `module`, `func_name`.
+- **Rotation:** 5 MB max, 5 backup files.
+- Usage: `from core.logger import ChitraguptLogger; logger = ChitraguptLogger.get_logger()`
 
 ## Data Storage
 - **Rules:** `data/db_rules.json` — role definitions with `level`, `name`, and `actions` list.
@@ -95,6 +220,7 @@ if not rbac.has_permission(user_id, "kick_user"):
 - **Sending:** All outbound messages use `requests.post` to `sendMessage` with a `timeout=10`.
 - **Data Storage:** Use the `json` module for all reads/writes to `data/db_rules.json` and
   `data/db_users.json`.
+- **Validation:** Pydantic ≥ 2.0 `BaseModel` for all SDK models.
 
 # Coding Standards
 - **Naming Conventions:** Use `snake_case` for variables and functions, `PascalCase` for classes.

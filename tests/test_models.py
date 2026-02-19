@@ -7,7 +7,7 @@ import pytest
 # Ensure the project root is importable.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from models import (
+from sdk.models import (
     Error,
     Update,
     WebhookInfo,

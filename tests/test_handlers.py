@@ -121,9 +121,9 @@ class TestRBACHelpers:
 class TestHandleStart:
     """Validate /start command registration and admin alerts."""
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_new_user_registered_as_guest(self, mock_send, rbac) -> None:
-        from main import handle_start
+        from bot.handlers import handle_start
 
         msg = _make_message(999, "/start")
         handle_start(rbac, msg, 999)
@@ -137,9 +137,9 @@ class TestHandleStart:
         assert "Welcome" in first_call_text
         assert "pending" in first_call_text
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_new_user_alerts_superadmins(self, mock_send, rbac) -> None:
-        from main import handle_start
+        from bot.handlers import handle_start
 
         msg = _make_message(999, "/start")
         handle_start(rbac, msg, 999)
@@ -152,9 +152,9 @@ class TestHandleStart:
         markup = admin_call[1]["reply_markup"]
         assert "inline_keyboard" in markup
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_returning_user_no_reregistration(self, mock_send, rbac) -> None:
-        from main import handle_start
+        from bot.handlers import handle_start
 
         msg = _make_message(400, "/start")
         handle_start(rbac, msg, 400)
@@ -171,9 +171,9 @@ class TestHandleStart:
 class TestHandleHelp:
     """Validate /help displays permission-aware buttons."""
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_guest_sees_basic_commands(self, mock_send, rbac) -> None:
-        from main import handle_help
+        from bot.handlers import handle_help
 
         msg = _make_message(9999, "/help")
         handle_help(rbac, msg, 9999)  # Unknown user → Guest
@@ -186,9 +186,9 @@ class TestHandleHelp:
         assert any("/help" in t for t in button_texts)
         assert not any("/kick" in t for t in button_texts)
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_moderator_sees_kick(self, mock_send, rbac) -> None:
-        from main import handle_help
+        from bot.handlers import handle_help
 
         msg = _make_message(300, "/help")
         handle_help(rbac, msg, 300)
@@ -205,9 +205,9 @@ class TestHandleHelp:
 class TestHandleStatus:
     """Validate /status shows rank info."""
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_status_shows_role(self, mock_send, rbac) -> None:
-        from main import handle_status
+        from bot.handlers import handle_status
 
         msg = _make_message(300, "/status")
         handle_status(rbac, msg, 300)
@@ -224,18 +224,18 @@ class TestHandleStatus:
 class TestHandleStop:
     """Validate /stop and /exit handlers."""
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_stop(self, mock_send) -> None:
-        from main import handle_stop
+        from bot.handlers import handle_stop
 
         msg = _make_message(400, "/stop")
         handle_stop(msg, 400)
         text = mock_send.call_args[0][1]
         assert "Session ended" in text
 
-    @patch("main.send_message")
+    @patch("bot.handlers.send_message")
     def test_exit(self, mock_send) -> None:
-        from main import handle_stop
+        from bot.handlers import handle_stop
 
         msg = _make_message(400, "/exit")
         handle_stop(msg, 400)
@@ -248,10 +248,10 @@ class TestHandleStop:
 class TestCallbackApproval:
     """Validate the admin approval flow via callback queries."""
 
-    @patch("main.answer_callback_query")
-    @patch("main.send_message")
+    @patch("bot.callbacks.answer_callback_query")
+    @patch("bot.callbacks.send_message")
     def test_approve_member(self, mock_send, mock_answer, rbac) -> None:
-        from main import handle_callback_query
+        from bot.callbacks import handle_callback_query
 
         # First register the target user
         rbac.set_user_level(999, 0, name="NewUser")
@@ -265,10 +265,10 @@ class TestCallbackApproval:
         # Two send_message calls: one to admin, one to user
         assert mock_send.call_count == 2
 
-    @patch("main.answer_callback_query")
-    @patch("main.send_message")
+    @patch("bot.callbacks.answer_callback_query")
+    @patch("bot.callbacks.send_message")
     def test_promote_mod(self, mock_send, mock_answer, rbac) -> None:
-        from main import handle_callback_query
+        from bot.callbacks import handle_callback_query
 
         rbac.set_user_level(999, 0, name="NewUser")
 
@@ -278,10 +278,10 @@ class TestCallbackApproval:
         assert rbac.get_user_level(999) == 50
         mock_answer.assert_called_once()
 
-    @patch("main.answer_callback_query")
-    @patch("main.send_message")
+    @patch("bot.callbacks.answer_callback_query")
+    @patch("bot.callbacks.send_message")
     def test_reject(self, mock_send, mock_answer, rbac) -> None:
-        from main import handle_callback_query
+        from bot.callbacks import handle_callback_query
 
         rbac.set_user_level(999, 0, name="NewUser")
 
@@ -293,10 +293,10 @@ class TestCallbackApproval:
         mock_answer.assert_called_once()
         assert mock_send.call_count == 2
 
-    @patch("main.answer_callback_query")
-    @patch("main.send_message")
+    @patch("bot.callbacks.answer_callback_query")
+    @patch("bot.callbacks.send_message")
     def test_non_admin_cannot_approve(self, mock_send, mock_answer, rbac) -> None:
-        from main import handle_callback_query
+        from bot.callbacks import handle_callback_query
 
         rbac.set_user_level(999, 0, name="NewUser")
 
@@ -317,57 +317,57 @@ class TestCallbackApproval:
 class TestProcessUpdate:
     """Validate that process_update dispatches to the right handlers."""
 
-    @patch("main.handle_start")
+    @patch("bot.dispatcher.handle_start")
     def test_dispatches_start(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_update(400, "/start")
         process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("main.handle_help")
+    @patch("bot.dispatcher.handle_help")
     def test_dispatches_help(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_update(400, "/help")
         process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("main.handle_status")
+    @patch("bot.dispatcher.handle_status")
     def test_dispatches_status(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_update(400, "/status")
         process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("main.handle_stop")
+    @patch("bot.dispatcher.handle_stop")
     def test_dispatches_stop(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_update(400, "/stop")
         process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("main.handle_stop")
+    @patch("bot.dispatcher.handle_stop")
     def test_dispatches_exit(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_update(400, "/exit")
         process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("main.handle_kick")
+    @patch("bot.dispatcher.handle_kick")
     def test_dispatches_kick(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_update(400, "/kick 123")
         process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("main.handle_callback_query")
+    @patch("bot.dispatcher.handle_callback_query")
     def test_dispatches_callback_query(self, mock_handler, rbac) -> None:
-        from main import process_update
+        from bot.dispatcher import process_update
 
         update = _make_callback_query(100, "approve_member:999")
         process_update(rbac, update)
