@@ -3,7 +3,7 @@
 import json
 import sys
 import os
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, AsyncMock
 
 import pytest
 
@@ -121,12 +121,13 @@ class TestRBACHelpers:
 class TestHandleStart:
     """Validate /start command registration and admin alerts."""
 
-    @patch("bot.handlers.send_message")
-    def test_new_user_registered_as_guest(self, mock_send, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_new_user_registered_as_guest(self, mock_send, rbac) -> None:
         from bot.handlers import handle_start
 
         msg = _make_message(999, "/start")
-        handle_start(rbac, msg, 999)
+        await handle_start(rbac, msg, 999)
 
         # User should be persisted at level 0
         assert rbac.get_user_level(999) == 0
@@ -137,12 +138,13 @@ class TestHandleStart:
         assert "Welcome" in first_call_text
         assert "pending" in first_call_text
 
-    @patch("bot.handlers.send_message")
-    def test_new_user_alerts_superadmins(self, mock_send, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_new_user_alerts_superadmins(self, mock_send, rbac) -> None:
         from bot.handlers import handle_start
 
         msg = _make_message(999, "/start")
-        handle_start(rbac, msg, 999)
+        await handle_start(rbac, msg, 999)
 
         # Should have sent: 1 welcome + 1 alert to SuperAdmin(100)
         assert mock_send.call_count == 2
@@ -152,12 +154,13 @@ class TestHandleStart:
         markup = admin_call[1]["reply_markup"]
         assert "inline_keyboard" in markup
 
-    @patch("bot.handlers.send_message")
-    def test_returning_user_no_reregistration(self, mock_send, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_returning_user_no_reregistration(self, mock_send, rbac) -> None:
         from bot.handlers import handle_start
 
         msg = _make_message(400, "/start")
-        handle_start(rbac, msg, 400)
+        await handle_start(rbac, msg, 400)
 
         # Level should remain 10 (Member), not reset to 0
         assert rbac.get_user_level(400) == 10
@@ -171,12 +174,13 @@ class TestHandleStart:
 class TestHandleHelp:
     """Validate /help displays permission-aware buttons."""
 
-    @patch("bot.handlers.send_message")
-    def test_guest_sees_basic_commands(self, mock_send, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_guest_sees_basic_commands(self, mock_send, rbac) -> None:
         from bot.handlers import handle_help
 
         msg = _make_message(9999, "/help")
-        handle_help(rbac, msg, 9999)  # Unknown user → Guest
+        await handle_help(rbac, msg, 9999)  # Unknown user → Guest
 
         call_args = mock_send.call_args
         assert "reply_markup" in call_args[1]
@@ -186,12 +190,13 @@ class TestHandleHelp:
         assert any("/help" in t for t in button_texts)
         assert not any("/kick" in t for t in button_texts)
 
-    @patch("bot.handlers.send_message")
-    def test_moderator_sees_kick(self, mock_send, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_moderator_sees_kick(self, mock_send, rbac) -> None:
         from bot.handlers import handle_help
 
         msg = _make_message(300, "/help")
-        handle_help(rbac, msg, 300)
+        await handle_help(rbac, msg, 300)
 
         call_args = mock_send.call_args
         markup = call_args[1]["reply_markup"]
@@ -205,12 +210,13 @@ class TestHandleHelp:
 class TestHandleStatus:
     """Validate /status shows rank info."""
 
-    @patch("bot.handlers.send_message")
-    def test_status_shows_role(self, mock_send, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_status_shows_role(self, mock_send, rbac) -> None:
         from bot.handlers import handle_status
 
         msg = _make_message(300, "/status")
-        handle_status(rbac, msg, 300)
+        await handle_status(rbac, msg, 300)
 
         text = mock_send.call_args[0][1]
         assert "Moderator" in text
@@ -224,21 +230,23 @@ class TestHandleStatus:
 class TestHandleStop:
     """Validate /stop and /exit handlers."""
 
-    @patch("bot.handlers.send_message")
-    def test_stop(self, mock_send) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_stop(self, mock_send) -> None:
         from bot.handlers import handle_stop
 
         msg = _make_message(400, "/stop")
-        handle_stop(msg, 400)
+        await handle_stop(msg, 400)
         text = mock_send.call_args[0][1]
         assert "Session ended" in text
 
-    @patch("bot.handlers.send_message")
-    def test_exit(self, mock_send) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_exit(self, mock_send) -> None:
         from bot.handlers import handle_stop
 
         msg = _make_message(400, "/exit")
-        handle_stop(msg, 400)
+        await handle_stop(msg, 400)
         assert mock_send.called
 
 
@@ -248,16 +256,17 @@ class TestHandleStop:
 class TestCallbackApproval:
     """Validate the admin approval flow via callback queries."""
 
-    @patch("bot.callbacks.answer_callback_query")
-    @patch("bot.callbacks.send_message")
-    def test_approve_member(self, mock_send, mock_answer, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_approve_member(self, mock_send, mock_answer, rbac) -> None:
         from bot.callbacks import handle_callback_query
 
         # First register the target user
-        rbac.set_user_level(999, 0, name="NewUser")
+        await rbac.set_user_level(999, 0, name="NewUser")
 
         cb = _make_callback_query(100, "approve_member:999")["callback_query"]
-        handle_callback_query(rbac, cb)
+        await handle_callback_query(rbac, cb)
 
         # User level should be updated to 10
         assert rbac.get_user_level(999) == 10
@@ -265,44 +274,47 @@ class TestCallbackApproval:
         # Two send_message calls: one to admin, one to user
         assert mock_send.call_count == 2
 
-    @patch("bot.callbacks.answer_callback_query")
-    @patch("bot.callbacks.send_message")
-    def test_promote_mod(self, mock_send, mock_answer, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_promote_mod(self, mock_send, mock_answer, rbac) -> None:
         from bot.callbacks import handle_callback_query
 
-        rbac.set_user_level(999, 0, name="NewUser")
+        await rbac.set_user_level(999, 0, name="NewUser")
 
         cb = _make_callback_query(100, "promote_mod:999")["callback_query"]
-        handle_callback_query(rbac, cb)
+        await handle_callback_query(rbac, cb)
 
         assert rbac.get_user_level(999) == 50
         mock_answer.assert_called_once()
 
-    @patch("bot.callbacks.answer_callback_query")
-    @patch("bot.callbacks.send_message")
-    def test_reject(self, mock_send, mock_answer, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_reject(self, mock_send, mock_answer, rbac) -> None:
         from bot.callbacks import handle_callback_query
 
-        rbac.set_user_level(999, 0, name="NewUser")
+        await rbac.set_user_level(999, 0, name="NewUser")
 
         cb = _make_callback_query(100, "reject:999")["callback_query"]
-        handle_callback_query(rbac, cb)
+        await handle_callback_query(rbac, cb)
 
         # Level unchanged (still Guest)
         assert rbac.get_user_level(999) == 0
         mock_answer.assert_called_once()
         assert mock_send.call_count == 2
 
-    @patch("bot.callbacks.answer_callback_query")
-    @patch("bot.callbacks.send_message")
-    def test_non_admin_cannot_approve(self, mock_send, mock_answer, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_non_admin_cannot_approve(self, mock_send, mock_answer, rbac) -> None:
         from bot.callbacks import handle_callback_query
 
-        rbac.set_user_level(999, 0, name="NewUser")
+        await rbac.set_user_level(999, 0, name="NewUser")
 
         # User 400 is a Member (level 10) — no manage_users permission
         cb = _make_callback_query(400, "approve_member:999")["callback_query"]
-        handle_callback_query(rbac, cb)
+        await handle_callback_query(rbac, cb)
 
         # Level should still be 0
         assert rbac.get_user_level(999) == 0
@@ -317,58 +329,166 @@ class TestCallbackApproval:
 class TestProcessUpdate:
     """Validate that process_update dispatches to the right handlers."""
 
-    @patch("bot.dispatcher.handle_start")
-    def test_dispatches_start(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_start", new_callable=AsyncMock)
+    async def test_dispatches_start(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/start")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("bot.dispatcher.handle_help")
-    def test_dispatches_help(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_help", new_callable=AsyncMock)
+    async def test_dispatches_help(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/help")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("bot.dispatcher.handle_status")
-    def test_dispatches_status(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_status", new_callable=AsyncMock)
+    async def test_dispatches_status(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/status")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("bot.dispatcher.handle_stop")
-    def test_dispatches_stop(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_stop", new_callable=AsyncMock)
+    async def test_dispatches_stop(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/stop")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("bot.dispatcher.handle_stop")
-    def test_dispatches_exit(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_stop", new_callable=AsyncMock)
+    async def test_dispatches_exit(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/exit")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("bot.dispatcher.handle_kick")
-    def test_dispatches_kick(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_kick", new_callable=AsyncMock)
+    async def test_dispatches_kick(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/kick 123")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
 
-    @patch("bot.dispatcher.handle_callback_query")
-    def test_dispatches_callback_query(self, mock_handler, rbac) -> None:
+    @pytest.mark.asyncio
+    @patch("bot.dispatcher.handle_callback_query", new_callable=AsyncMock)
+    async def test_dispatches_callback_query(self, mock_handler, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_callback_query(100, "approve_member:999")
-        process_update(rbac, update)
+        await process_update(rbac, update)
         mock_handler.assert_called_once()
+
+
+# ── Identity resolution for callback_query ───────────────────────────────────
+
+
+class TestIdentityCallbackQuery:
+    """Validate get_identity handles callback_query updates."""
+
+    def test_callback_from_user(self) -> None:
+        from core.identity import get_identity
+
+        update = _make_callback_query(42, "approve_member:999")
+        assert get_identity(update) == 42
+
+    def test_callback_sender_chat(self) -> None:
+        from core.identity import get_identity
+
+        update = {
+            "update_id": 3,
+            "callback_query": {
+                "id": "cb1",
+                "from": {"id": 42, "is_bot": False, "first_name": "X"},
+                "message": {
+                    "message_id": 10,
+                    "date": 0,
+                    "chat": {"id": 1000, "type": "private"},
+                    "sender_chat": {"id": -1001234},
+                },
+                "data": "test",
+            },
+        }
+        # sender_chat in the message takes priority
+        assert get_identity(update) == -1001234
+
+
+# ── Rich metadata storage ───────────────────────────────────────────────────
+
+
+class TestRichMetadata:
+    """Validate RBAC stores rich user metadata fields."""
+
+    @pytest.mark.asyncio
+    async def test_set_user_level_with_metadata(self, rbac) -> None:
+        await rbac.set_user_level(
+            777, 10, name="TestUser",
+            username="testuser", first_name="Test", last_name="User",
+            language_code="en", is_premium=True, is_special=False,
+        )
+        entry = rbac.users["777"]
+        assert entry["level"] == 10
+        assert entry["username"] == "testuser"
+        assert entry["first_name"] == "Test"
+        assert entry["last_name"] == "User"
+        assert entry["language_code"] == "en"
+        assert entry["is_premium"] is True
+        assert entry["is_special"] is False
+
+    @pytest.mark.asyncio
+    async def test_sync_super_admin_rich_metadata(self, rbac) -> None:
+        await rbac.sync_super_admin(
+            888, "Admin", username="admin_bot", first_name="Admin",
+            language_code="de",
+        )
+        entry = rbac.users["888"]
+        assert entry["level"] == 100
+        assert entry["username"] == "admin_bot"
+        assert entry["first_name"] == "Admin"
+        assert entry["language_code"] == "de"
+
+    @pytest.mark.asyncio
+    async def test_sync_super_admin_updates_changed_metadata(self, rbac) -> None:
+        await rbac.sync_super_admin(888, "Admin", username="old_name")
+        assert rbac.users["888"]["username"] == "old_name"
+
+        await rbac.sync_super_admin(888, "Admin", username="new_name")
+        assert rbac.users["888"]["username"] == "new_name"
+
+
+# ── asyncio.Lock safety ─────────────────────────────────────────────────────
+
+
+class TestAsyncLock:
+    """Validate the asyncio.Lock prevents concurrent write corruption."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_writes_do_not_corrupt(self, rbac) -> None:
+        """Fire many set_user_level calls concurrently — file should stay valid."""
+        import asyncio
+
+        tasks = [rbac.set_user_level(i, 10, name=f"user{i}") for i in range(500, 520)]
+        await asyncio.gather(*tasks)
+
+        # All 20 new users must be present
+        for i in range(500, 520):
+            assert str(i) in rbac.users
+
+        # The persisted file must be valid JSON
+        with open(rbac.users_path) as f:
+            on_disk = json.load(f)
+        for i in range(500, 520):
+            assert str(i) in on_disk

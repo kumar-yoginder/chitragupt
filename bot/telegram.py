@@ -1,9 +1,11 @@
 """Low-level Telegram Bot API helpers.
 
-Thin wrappers around ``requests`` for polling updates, sending messages,
-and acknowledging callback queries.
+Thin async wrappers around ``requests`` for polling updates, sending messages,
+and acknowledging callback queries.  All blocking I/O is offloaded via
+:func:`asyncio.to_thread` so the event loop is never blocked.
 """
 
+import asyncio
 import json
 
 import requests
@@ -14,13 +16,22 @@ from core.logger import ChitraguptLogger
 logger = ChitraguptLogger.get_logger()
 
 
-def get_updates(offset: int | None = None) -> dict:
+async def make_request(method: str, url: str, **kwargs: object) -> requests.Response:
+    """Run a :mod:`requests` call inside a thread to keep the event loop free.
+
+    *method* is the HTTP verb (``"get"``, ``"post"``, …).
+    """
+    func = getattr(requests, method.lower())
+    return await asyncio.to_thread(func, url, **kwargs)
+
+
+async def get_updates(offset: int | None = None) -> dict:
     """Long-poll the Telegram Bot API for new updates."""
     params: dict = {"timeout": 30}
     if offset is not None:
         params["offset"] = offset
     try:
-        response = requests.get(f"{BASE_URL}/getUpdates", params=params, timeout=35)
+        response = await make_request("get", f"{BASE_URL}/getUpdates", params=params, timeout=35)
         response.raise_for_status()
         try:
             return response.json()
@@ -32,7 +43,7 @@ def get_updates(offset: int | None = None) -> dict:
         return {"ok": False, "result": []}
 
 
-def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> None:
+async def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> None:
     """Send a text message to a Telegram chat.
 
     Optionally include an InlineKeyboardMarkup via *reply_markup*.
@@ -42,7 +53,8 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> N
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     try:
-        response = requests.post(
+        response = await make_request(
+            "post",
             f"{BASE_URL}/sendMessage",
             json=payload,
             timeout=10,
@@ -59,13 +71,14 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> N
         logger.error("sendMessage error: %s", exc)
 
 
-def answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
+async def answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
     """Acknowledge a callback query so the spinner disappears for the user."""
     payload: dict = {"callback_query_id": callback_query_id}
     if text is not None:
         payload["text"] = text
     try:
-        response = requests.post(
+        response = await make_request(
+            "post",
             f"{BASE_URL}/answerCallbackQuery",
             json=payload,
             timeout=10,
