@@ -1,4 +1,9 @@
-def get_identity(update):
+from core.logger import ChitraguptLogger
+
+logger = ChitraguptLogger.get_logger()
+
+
+def get_identity(update: dict) -> int | None:
     """Extract entity ID from a Telegram update.
 
     Returns the sender_chat ID (a negative group ID) for Anonymous Admins and
@@ -10,15 +15,21 @@ def get_identity(update):
         or update.get("channel_post")
     )
     if not message:
+        logger.debug("No message object found in update %s", update.get("update_id"))
         return None
 
     # Anonymous admins post as the group itself; sender_chat.id is negative.
     sender_chat = message.get("sender_chat")
     if sender_chat:
-        return sender_chat.get("id")
+        identity = sender_chat.get("id")
+        logger.info("Resolved anonymous/channel identity: %s (sender_chat)", identity)
+        return identity
 
     from_user = message.get("from")
     if from_user:
-        return from_user.get("id")
+        identity = from_user.get("id")
+        logger.info("Resolved user identity: %s", identity)
+        return identity
 
+    logger.warning("Could not resolve identity from update %s", update.get("update_id"))
     return None

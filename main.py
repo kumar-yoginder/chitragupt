@@ -5,7 +5,10 @@ import requests
 
 from config import BOT_TOKEN, BASE_URL
 from core.identity import get_identity
+from core.logger import ChitraguptLogger
 from core.rbac import RBAC
+
+logger = ChitraguptLogger.get_logger()
 
 
 def get_updates(offset=None):
@@ -19,15 +22,16 @@ def get_updates(offset=None):
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            print(f"[getUpdates JSON decode error] {exc}")
+            logger.error("getUpdates JSON decode error: %s", exc)
             return {"ok": False, "result": []}
     except requests.RequestException as exc:
-        print(f"[getUpdates error] {exc}")
+        logger.error("getUpdates error: %s", exc)
         return {"ok": False, "result": []}
 
 
-def send_message(chat_id, text):
+def send_message(chat_id: int, text: str) -> None:
     """Send a text message to a Telegram chat."""
+    logger.debug("Sending message to chat %s: %s", chat_id, text[:80])
     try:
         response = requests.post(
             f"{BASE_URL}/sendMessage",
@@ -37,11 +41,13 @@ def send_message(chat_id, text):
         response.raise_for_status()
         data = response.json()
         if not data.get("ok"):
-            print(f"[sendMessage Telegram error] {data}")
+            logger.warning("sendMessage Telegram error: %s", data)
+        else:
+            logger.info("Message sent to chat %s", chat_id)
     except requests.HTTPError as exc:
-        print(f"[sendMessage HTTP error] {exc} (status={exc.response.status_code})")
+        logger.error("sendMessage HTTP error: %s (status=%s)", exc, exc.response.status_code)
     except requests.RequestException as exc:
-        print(f"[sendMessage error] {exc}")
+        logger.error("sendMessage error: %s", exc)
 
 
 def handle_kick(rbac, message, user_id):
@@ -51,8 +57,10 @@ def handle_kick(rbac, message, user_id):
     Requires the 'kick' action permission.
     """
     chat_id = message["chat"]["id"]
+    logger.info("User %s invoked /kick in chat %s", user_id, chat_id)
 
     if not rbac.has_permission(user_id, "kick_user"):
+        logger.warning("Unauthorised /kick attempt by user %s in chat %s", user_id, chat_id)
         send_message(chat_id, "⛔ You do not have permission to kick users.")
         return
 
@@ -75,19 +83,22 @@ def handle_kick(rbac, message, user_id):
         )
         result = response.json()
     except requests.RequestException as exc:
-        print(f"[kickChatMember error] {exc}")
+        logger.error("kickChatMember error: %s", exc)
         send_message(chat_id, "❌ Failed to reach Telegram API.")
         return
 
     if result.get("ok"):
+        logger.info("User %s kicked target %s in chat %s", user_id, target_id, chat_id)
         send_message(chat_id, f"✅ User {target_id} has been kicked.")
     else:
         description = result.get("description", "Unknown error")
+        logger.warning("Kick failed for target %s in chat %s: %s", target_id, chat_id, description)
         send_message(chat_id, f"❌ Could not kick user: {description}")
 
 
 def process_update(rbac, update):
     """Dispatch a single Telegram update to the appropriate handler."""
+    update_id = update.get("update_id")
     message = (
         update.get("message")
         or update.get("edited_message")
@@ -95,15 +106,21 @@ def process_update(rbac, update):
         or update.get("edited_channel_post")
     )
     if not message:
+        logger.debug("Update %s has no message — skipping", update_id)
         return
 
     user_id = get_identity(update)
     if user_id is None:
+        logger.debug("Update %s — could not resolve identity, skipping", update_id)
         return
 
     text = message.get("text", "")
+    logger.debug("Processing update %s from user %s: %s", update_id, user_id, text[:80])
+
     if text.startswith("/kick"):
         handle_kick(rbac, message, user_id)
+    else:
+        logger.debug("No command matched for update %s", update_id)
 
 
 def main():
@@ -113,14 +130,18 @@ def main():
     rbac = RBAC()
     offset = None
 
-    print("Chitragupt bot is running. Polling for updates...")
+    logger.info("Chitragupt bot is running. Polling for updates...")
     while True:
         data = get_updates(offset)
         if not data.get("ok"):
+            logger.warning("getUpdates returned ok=false, retrying in 5 s")
             time.sleep(5)
             continue
 
-        for update in data.get("result", []):
+        updates = data.get("result", [])
+        if updates:
+            logger.debug("Received %d update(s)", len(updates))
+        for update in updates:
             process_update(rbac, update)
             offset = update["update_id"] + 1
 
