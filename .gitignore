@@ -208,3 +208,4 @@ __marimo__/
 
 # Chitragupt log files
 logs/
+.pytest_cache/

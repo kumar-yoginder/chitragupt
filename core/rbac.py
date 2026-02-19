@@ -92,6 +92,34 @@ class RBAC:
 
         self._save_users()
 
+    def get_role_name(self, user_id: int) -> str:
+        """Return the human-readable role name for *user_id*."""
+        level = self.get_user_level(user_id)
+        role = self._rules_by_level.get(level)
+        if role is None:
+            return "Unknown"
+        return role.get("name", "Unknown")
+
+    def get_user_actions(self, user_id: int) -> list[str]:
+        """Return the list of action slugs permitted for *user_id*."""
+        level = self.get_user_level(user_id)
+        role = self._rules_by_level.get(level)
+        if role is None:
+            return []
+        return role.get("actions", [])
+
+    def get_superadmins(self) -> list[int]:
+        """Return a list of user IDs whose level is 100 (SuperAdmin)."""
+        admins: list[int] = []
+        for uid_str, entry in self.users.items():
+            if entry.get("level") == 100:
+                try:
+                    admins.append(int(uid_str))
+                except ValueError:
+                    logger.warning("Invalid user_id key in db_users: %s", uid_str)
+        logger.debug("Found %d SuperAdmin(s)", len(admins))
+        return admins
+
     def _save_users(self) -> None:
         """Write users to disk atomically to prevent file corruption."""
         dir_name = os.path.dirname(self.users_path) or "."
