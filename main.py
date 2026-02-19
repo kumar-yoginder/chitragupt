@@ -1,3 +1,4 @@
+import json
 import time
 
 import requests
@@ -14,7 +15,12 @@ def get_updates(offset=None):
         params["offset"] = offset
     try:
         response = requests.get(f"{BASE_URL}/getUpdates", params=params, timeout=35)
-        return response.json()
+        response.raise_for_status()
+        try:
+            return response.json()
+        except json.JSONDecodeError as exc:
+            print(f"[getUpdates JSON decode error] {exc}")
+            return {"ok": False, "result": []}
     except requests.RequestException as exc:
         print(f"[getUpdates error] {exc}")
         return {"ok": False, "result": []}
@@ -23,11 +29,17 @@ def get_updates(offset=None):
 def send_message(chat_id, text):
     """Send a text message to a Telegram chat."""
     try:
-        requests.post(
+        response = requests.post(
             f"{BASE_URL}/sendMessage",
             json={"chat_id": chat_id, "text": text},
             timeout=10,
         )
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("ok"):
+            print(f"[sendMessage Telegram error] {data}")
+    except requests.HTTPError as exc:
+        print(f"[sendMessage HTTP error] {exc} (status={exc.response.status_code})")
     except requests.RequestException as exc:
         print(f"[sendMessage error] {exc}")
 
@@ -40,7 +52,7 @@ def handle_kick(rbac, message, user_id):
     """
     chat_id = message["chat"]["id"]
 
-    if not rbac.has_permission(user_id, "kick"):
+    if not rbac.has_permission(user_id, "kick_user"):
         send_message(chat_id, "⛔ You do not have permission to kick users.")
         return
 
@@ -76,7 +88,12 @@ def handle_kick(rbac, message, user_id):
 
 def process_update(rbac, update):
     """Dispatch a single Telegram update to the appropriate handler."""
-    message = update.get("message") or update.get("edited_message")
+    message = (
+        update.get("message")
+        or update.get("edited_message")
+        or update.get("channel_post")
+        or update.get("edited_channel_post")
+    )
     if not message:
         return
 
