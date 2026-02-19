@@ -20,6 +20,7 @@ from bot.handlers import (
     handle_status,
     handle_stop,
     handle_kick,
+    handle_clear,
     _extract_user_metadata,
 )
 from bot.callbacks import handle_callback_query
@@ -74,6 +75,8 @@ async def process_update(rbac: RBAC, update: dict) -> None:
         await handle_stop(message, user_id)
     elif text.startswith("/kick"):
         await handle_kick(rbac, message, user_id)
+    elif text.startswith("/clear"):
+        await handle_clear(message, user_id)
     else:
         logger.debug("No command matched for update %s", update_id)
 

@@ -7,7 +7,7 @@ by the dispatcher in :mod:`bot.dispatcher`.
 from config import BASE_URL
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC
-from bot.telegram import send_message, make_request
+from bot.telegram import send_message, delete_message, delete_messages, make_request
 
 logger = ChitraguptLogger.get_logger()
 
@@ -19,6 +19,7 @@ COMMAND_PERMISSIONS: dict[str, dict[str, str]] = {
     "/kick":   {"action": "kick_user",    "description": "Kick a user from the chat"},
     "/stop":   {"action": "view_help",    "description": "End your session"},
     "/exit":   {"action": "view_help",    "description": "End your session"},
+    "/clear":  {"action": "view_help",    "description": "Clear chat history with the bot"},
 }
 
 
@@ -160,6 +161,29 @@ async def handle_kick(rbac: RBAC, message: dict, user_id: int) -> None:
         description = result.get("description", "Unknown error")
         logger.warning("Kick failed for target %s in chat %s: %s", target_id, chat_id, description)
         await send_message(chat_id, f"❌ Could not kick user: {description}")
+
+
+async def handle_clear(message: dict, user_id: int) -> None:
+    """Handle /clear — bulk-delete all messages from current down to 1.
+
+    Builds the full range of message IDs (current_msg_id → 1) and sends
+    them to Telegram's ``deleteMessages`` endpoint in batches of 100.
+    """
+    chat_id = message["chat"]["id"]
+    current_msg_id = message.get("message_id", 0)
+    logger.info("User %s invoked /clear in chat %s (msg_id=%s)", user_id, chat_id, current_msg_id)
+
+    if not current_msg_id:
+        await send_message(chat_id, "❌ Could not determine message range.")
+        return
+
+    # Build the full list of message IDs from current down to 1.
+    msg_ids = list(range(current_msg_id, 0, -1))
+
+    deleted = await delete_messages(chat_id, msg_ids)
+
+    logger.info("Cleared %d message(s) for user %s in chat %s", deleted, user_id, chat_id)
+    await send_message(chat_id, f"🧹 Cleared {deleted} message(s).")
 
 
 def _extract_user_metadata(from_user: dict) -> dict:

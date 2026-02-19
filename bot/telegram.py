@@ -71,6 +71,54 @@ async def send_message(chat_id: int, text: str, reply_markup: dict | None = None
         logger.error("sendMessage error: %s", exc)
 
 
+async def delete_message(chat_id: int, message_id: int) -> bool:
+    """Delete a single message.  Returns True on success, False otherwise."""
+    try:
+        response = await make_request(
+            "post",
+            f"{BASE_URL}/deleteMessage",
+            json={"chat_id": chat_id, "message_id": message_id},
+            timeout=10,
+        )
+        data = response.json()
+        return data.get("ok", False)
+    except requests.RequestException:
+        return False
+
+
+async def delete_messages(chat_id: int, message_ids: list[int]) -> int:
+    """Bulk-delete messages using Telegram's ``deleteMessages`` endpoint.
+
+    The API accepts 1–100 IDs per call.  If more than 100 are passed they
+    are sent in consecutive batches.  Returns the total number of messages
+    the API confirmed as deleted.
+    """
+    if not message_ids:
+        return 0
+
+    deleted = 0
+    # Telegram allows at most 100 message IDs per request.
+    batch_size = 100
+    for start in range(0, len(message_ids), batch_size):
+        batch = message_ids[start : start + batch_size]
+        try:
+            response = await make_request(
+                "post",
+                f"{BASE_URL}/deleteMessages",
+                json={"chat_id": chat_id, "message_ids": batch},
+                timeout=10,
+            )
+            data = response.json()
+            if data.get("ok"):
+                deleted += len(batch)
+                logger.debug("deleteMessages ok for %d IDs in chat %s", len(batch), chat_id)
+            else:
+                logger.warning("deleteMessages failed for chat %s: %s", chat_id, data)
+        except requests.RequestException as exc:
+            logger.error("deleteMessages error for chat %s: %s", chat_id, exc)
+    return deleted
+
+
 async def answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
     """Acknowledge a callback query so the spinner disappears for the user."""
     payload: dict = {"callback_query_id": callback_query_id}

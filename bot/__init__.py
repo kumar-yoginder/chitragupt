@@ -6,13 +6,14 @@ This package may import from ``core/`` and ``config`` only.
 from bot.callbacks import handle_callback_query
 from bot.dispatcher import process_update, run
 from bot.handlers import (
+    handle_clear,
     handle_help,
     handle_kick,
     handle_start,
     handle_status,
     handle_stop,
 )
-from bot.telegram import answer_callback_query, get_updates, send_message
+from bot.telegram import answer_callback_query, delete_message, delete_messages, get_updates, send_message
 
 __all__ = [
     # Dispatcher
@@ -24,10 +25,12 @@ __all__ = [
     "handle_status",
     "handle_stop",
     "handle_kick",
+    "handle_clear",
     # Callback handlers
     "handle_callback_query",
     # Telegram API helpers
     "get_updates",
     "send_message",
+    "delete_message",
     "answer_callback_query",
 ]
