@@ -1,0 +1,23 @@
+# Test suites & caches
+tests/
+__pycache__/
+.pytest_cache/
+
+# CI / GitHub config
+.github/
+
+# Environment secrets
+.env
+
+# Version control
+.git/
+.gitignore
+
+# IDE / editor artefacts
+.vscode/
+.idea/
+
+# Build artefacts
+*.egg-info/
+dist/
+build/
