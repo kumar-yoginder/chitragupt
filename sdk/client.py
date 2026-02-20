@@ -12,7 +12,7 @@ and are now consolidated here so every Telegram API call lives in the SDK.
 from __future__ import annotations
 
 import asyncio
-import json as _json
+import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
@@ -1257,11 +1257,11 @@ async def get_updates(offset: int | None = None) -> dict:
         response.raise_for_status()
         try:
             return response.json()
-        except _json.JSONDecodeError as exc:
-            _sdk_logger.error("getUpdates JSON decode error: %s", exc)
+        except json.JSONDecodeError as exc:
+            _sdk_logger.error("getUpdates JSON decode error", extra={"api_endpoint": "getUpdates", "error": str(exc)})
             return {"ok": False, "result": []}
     except requests.RequestException as exc:
-        _sdk_logger.error("getUpdates request error: %s", exc)
+        _sdk_logger.error("getUpdates request error", extra={"api_endpoint": "getUpdates", "error": str(exc)})
         return {"ok": False, "result": []}
 
 
@@ -1277,7 +1277,7 @@ async def send_message(
     a *parse_mode* (``"Markdown"``, ``"MarkdownV2"``, ``"HTML"``).
     """
     client = _get_default_client()
-    _sdk_logger.debug("Sending message to chat_id=%s, text_preview=%.80s", chat_id, text)
+    _sdk_logger.debug("Sending message", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "text_preview": text[:80]})
     payload: dict = {"chat_id": chat_id, "text": text}
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
@@ -1293,13 +1293,13 @@ async def send_message(
         response.raise_for_status()
         data = response.json()
         if not data.get("ok"):
-            _sdk_logger.warning("sendMessage Telegram error: chat_id=%s, response=%s", chat_id, data)
+            _sdk_logger.warning("sendMessage Telegram error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "api_response": data})
         else:
-            _sdk_logger.info("Message sent to chat_id=%s", chat_id)
+            _sdk_logger.info("Message sent", extra={"chat_id": chat_id, "api_endpoint": "sendMessage"})
     except requests.HTTPError as exc:
-        _sdk_logger.error("sendMessage HTTP error: chat_id=%s, status=%s, error=%s", chat_id, exc.response.status_code, exc)
+        _sdk_logger.error("sendMessage HTTP error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "status_code": exc.response.status_code, "error": str(exc)})
     except requests.RequestException as exc:
-        _sdk_logger.error("sendMessage request error: chat_id=%s, error=%s", chat_id, exc)
+        _sdk_logger.error("sendMessage request error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "error": str(exc)})
 
 
 async def delete_message(chat_id: int, message_id: int) -> bool:
@@ -1343,11 +1343,11 @@ async def delete_messages(chat_id: int, message_ids: list[int]) -> int:
             data = response.json()
             if data.get("ok"):
                 deleted += len(batch)
-                _sdk_logger.debug("deleteMessages batch ok: chat_id=%s, batch_size=%d", chat_id, len(batch))
+                _sdk_logger.debug("deleteMessages batch ok", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "batch_size": len(batch)})
             else:
-                _sdk_logger.warning("deleteMessages batch failed: chat_id=%s, response=%s", chat_id, data)
+                _sdk_logger.warning("deleteMessages batch failed", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "api_response": data})
         except requests.RequestException as exc:
-            _sdk_logger.error("deleteMessages request error: chat_id=%s, error=%s", chat_id, exc)
+            _sdk_logger.error("deleteMessages request error", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "error": str(exc)})
     return deleted
 
 
@@ -1366,7 +1366,7 @@ async def answer_callback_query(callback_query_id: str, text: str | None = None)
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        _sdk_logger.error("answerCallbackQuery request error: cb_id=%s, error=%s", callback_query_id, exc)
+        _sdk_logger.error("answerCallbackQuery request error", extra={"api_endpoint": "answerCallbackQuery", "callback_query_id": callback_query_id, "error": str(exc)})
 
 
 # ── File download helpers ────────────────────────────────────────────────────
@@ -1389,10 +1389,10 @@ async def get_file_info(file_id: str) -> File | None:
         data = resp.json()
         if data.get("ok"):
             return File(**data["result"])
-        _sdk_logger.warning("getFile failed: file_id=%s, response=%s", file_id, data)
+        _sdk_logger.warning("getFile failed", extra={"api_endpoint": "getFile", "file_id": file_id, "api_response": data})
         return None
-    except (requests.RequestException, _json.JSONDecodeError) as exc:
-        _sdk_logger.error("getFile request error: file_id=%s, error=%s", file_id, exc)
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        _sdk_logger.error("getFile request error", extra={"api_endpoint": "getFile", "file_id": file_id, "error": str(exc)})
         return None
 
 
