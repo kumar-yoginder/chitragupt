@@ -1,4 +1,4 @@
-"""Tests for command handlers and callback query processing in main.py."""
+"""Tests for command handlers and callback query processing."""
 
 import json
 import sys
@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.rbac import RBAC
+from sdk.models import CallbackQuery, Chat, Message, User
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -40,22 +41,28 @@ def rbac(tmp_path):
     return RBAC(rules_path=str(rules_path), users_path=str(users_path))
 
 
-def _make_message(user_id: int, text: str, chat_id: int = 1000) -> dict:
-    """Build a minimal Telegram message dict."""
-    return {
-        "message_id": 1,
-        "date": 0,
-        "chat": {"id": chat_id, "type": "private"},
-        "from": {"id": user_id, "is_bot": False, "first_name": f"User{user_id}"},
-        "text": text,
-    }
+def _make_message(user_id: int, text: str, chat_id: int = 1000) -> Message:
+    """Build a minimal SDK Message model for handler tests."""
+    return Message(
+        message_id=1,
+        date=0,
+        chat=Chat(id=chat_id, type="private"),
+        from_field=User(id=user_id, is_bot=False, first_name=f"User{user_id}"),
+        text=text,
+    )
 
 
 def _make_update(user_id: int, text: str, chat_id: int = 1000) -> dict:
-    """Build a minimal Telegram update dict with a message."""
+    """Build a minimal Telegram update dict with a message.
+
+    Serialises the SDK Message back to a plain dict so that
+    :func:`core.identity.get_identity` (which operates on raw dicts)
+    and ``Update.model_validate`` both work correctly.
+    """
+    msg = _make_message(user_id, text, chat_id)
     return {
         "update_id": 1,
-        "message": _make_message(user_id, text, chat_id),
+        "message": msg.model_dump(by_alias=True, exclude_none=True),
     }
 
 
@@ -68,6 +75,7 @@ def _make_callback_query(
         "callback_query": {
             "id": cb_id,
             "from": {"id": admin_id, "is_bot": False, "first_name": f"Admin{admin_id}"},
+            "chat_instance": "test",
             "message": {
                 "message_id": 10,
                 "date": 0,
@@ -265,8 +273,9 @@ class TestCallbackApproval:
         # First register the target user
         await rbac.set_user_level(999, 0, name="NewUser")
 
-        cb = _make_callback_query(100, "approve_member:999")["callback_query"]
-        await handle_callback_query(rbac, cb)
+        cb_dict = _make_callback_query(100, "approve_member:999")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
 
         # User level should be updated to 10
         assert rbac.get_user_level(999) == 10
@@ -282,8 +291,9 @@ class TestCallbackApproval:
 
         await rbac.set_user_level(999, 0, name="NewUser")
 
-        cb = _make_callback_query(100, "promote_mod:999")["callback_query"]
-        await handle_callback_query(rbac, cb)
+        cb_dict = _make_callback_query(100, "promote_mod:999")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
 
         assert rbac.get_user_level(999) == 50
         mock_answer.assert_called_once()
@@ -296,8 +306,9 @@ class TestCallbackApproval:
 
         await rbac.set_user_level(999, 0, name="NewUser")
 
-        cb = _make_callback_query(100, "reject:999")["callback_query"]
-        await handle_callback_query(rbac, cb)
+        cb_dict = _make_callback_query(100, "reject:999")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
 
         # Level unchanged (still Guest)
         assert rbac.get_user_level(999) == 0
@@ -313,8 +324,9 @@ class TestCallbackApproval:
         await rbac.set_user_level(999, 0, name="NewUser")
 
         # User 400 is a Member (level 10) — no manage_users permission
-        cb = _make_callback_query(400, "approve_member:999")["callback_query"]
-        await handle_callback_query(rbac, cb)
+        cb_dict = _make_callback_query(400, "approve_member:999")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 400)
 
         # Level should still be 0
         assert rbac.get_user_level(999) == 0
