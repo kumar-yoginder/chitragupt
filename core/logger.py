@@ -108,18 +108,23 @@ class ChitraguptLogger:
         self._logger.addHandler(stream_handler)
 
         # --- Rotating file handler ---
-        os.makedirs(self._LOG_DIR, exist_ok=True)
-        log_path = os.path.join(self._LOG_DIR, self._LOG_FILE)
+        try:
+            os.makedirs(self._LOG_DIR, exist_ok=True)
+            log_path = os.path.join(self._LOG_DIR, self._LOG_FILE)
 
-        file_handler = RotatingFileHandler(
-            log_path,
-            maxBytes=self._MAX_BYTES,
-            backupCount=self._BACKUP_COUNT,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        self._logger.addHandler(file_handler)
+            file_handler = RotatingFileHandler(
+                log_path,
+                maxBytes=self._MAX_BYTES,
+                backupCount=self._BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            self._logger.addHandler(file_handler)
+        except (PermissionError, OSError) as exc:
+            self._logger.warning(
+                "File logging unavailable (%s). Using console only.", exc,
+            )
 
     # ------------------------------------------------------------------
     # Public API
