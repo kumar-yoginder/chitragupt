@@ -1,3 +1,10 @@
+"""Identity resolution — single entry point for determining who is acting.
+
+Examines ``sender_chat`` (for Anonymous Admins / channel posts) and ``from``
+(for regular users) in the correct priority order.  Returns a 64-bit integer
+user/chat ID or ``None`` when the identity cannot be determined.
+"""
+
 from core.logger import ChitraguptLogger
 
 logger = ChitraguptLogger.get_logger()

@@ -35,23 +35,24 @@ from typing import (
 )
 
 from core.rbac import RBAC
+from sdk.models import Message
 
 # ── Type variables ───────────────────────────────────────────────────────────
 
-T = TypeVar("T")  # generic payload type (dict today, sdk.models.Message later)
+T = TypeVar("T")  # generic payload type
 
 # ── Handler protocol ─────────────────────────────────────────────────────────
 
 @runtime_checkable
 class RBACHandler(Protocol):
     """Handler that requires RBAC + message + user_id."""
-    async def __call__(self, rbac: RBAC, message: dict, user_id: int) -> None: ...  # noqa: E704
+    async def __call__(self, rbac: RBAC, message: Message, user_id: int) -> None: ...  # noqa: E704
 
 
 @runtime_checkable
 class SimpleHandler(Protocol):
     """Handler that only needs message + user_id (no RBAC)."""
-    async def __call__(self, message: dict, user_id: int) -> None: ...  # noqa: E704
+    async def __call__(self, message: Message, user_id: int) -> None: ...  # noqa: E704
 
 
 # Union of both handler shapes
@@ -145,7 +146,7 @@ class CommandRegistry(Generic[T]):
         self,
         command: str,
         rbac: RBAC,
-        message: dict,
+        message: Message,
         user_id: int,
     ) -> bool:
         """Look up *command* and invoke its handler.
@@ -163,4 +164,4 @@ class CommandRegistry(Generic[T]):
 
 
 # Module-level singleton — import this everywhere.
-registry: CommandRegistry[dict] = CommandRegistry()
+registry: CommandRegistry[Message] = CommandRegistry()

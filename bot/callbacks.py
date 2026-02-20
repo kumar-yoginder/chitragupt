@@ -5,6 +5,7 @@ command menu.  When a user taps a command button from /help, the
 corresponding handler is invoked directly — no need to re-type the command.
 """
 
+from sdk.models import CallbackQuery, Chat, Message
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC
 from bot.registry import registry
@@ -13,28 +14,34 @@ from bot.telegram import answer_callback_query, send_message
 logger = ChitraguptLogger.get_logger()
 
 
-def _build_synthetic_message(callback_query: dict, text: str) -> dict:
-    """Build a minimal message dict from a callback query so command
-    handlers can be invoked as if the user had typed the command."""
-    cb_message = callback_query.get("message", {})
-    return {
-        "chat": cb_message.get("chat", {}),
-        "from": callback_query.get("from", {}),
-        "message_id": cb_message.get("message_id", 0),
-        "text": text,
-    }
+def _build_synthetic_message(callback_query: CallbackQuery, text: str) -> Message:
+    """Build a minimal SDK :class:`~sdk.models.Message` from a callback query.
+
+    Command handlers receive the same typed interface they would from a
+    regular text message.
+    """
+    cb_message = callback_query.message
+    return Message(
+        message_id=cb_message.message_id if cb_message else 0,
+        date=cb_message.date if cb_message else 0,
+        chat=cb_message.chat if cb_message else Chat(id=0, type="private"),
+        from_field=callback_query.from_field,
+        text=text,
+    )
 
 
-async def handle_callback_query(rbac: RBAC, callback_query: dict) -> None:
-    """Dispatch callback queries from inline keyboard buttons."""
-    cb_id = callback_query.get("id", "")
-    data = callback_query.get("data", "")
-    user = callback_query.get("from", {})
-    user_id = user.get("id")
-    chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+async def handle_callback_query(rbac: RBAC, callback_query: CallbackQuery, user_id: int) -> None:
+    """Dispatch callback queries from inline keyboard buttons.
 
-    if user_id is None or chat_id is None:
-        logger.warning("Callback query missing identity or chat", extra={"callback_query": callback_query})
+    Identity (*user_id*) is resolved by the dispatcher via
+    :func:`core.identity.get_identity` before this function is called.
+    """
+    cb_id = callback_query.id
+    data = callback_query.data or ""
+    chat_id = callback_query.message.chat.id if callback_query.message else None
+
+    if chat_id is None:
+        logger.warning("Callback query missing chat", extra={"callback_query_id": cb_id})
         await answer_callback_query(cb_id, "❌ Could not process.")
         return
 
@@ -59,18 +66,19 @@ async def _handle_command_callback(
     rbac: RBAC,
     cb_id: str,
     command: str,
-    callback_query: dict,
+    callback_query: CallbackQuery,
     user_id: int,
 ) -> None:
     """Execute the command handler that corresponds to an inline-button tap.
 
-    A synthetic message is built from the callback query so that each
-    handler receives the same interface it would from a regular text message.
-    Uses the shared :data:`bot.registry.registry` for dispatch so new
-    commands are automatically available without editing this module.
+    A synthetic :class:`~sdk.models.Message` is built from the callback query
+    so that each handler receives the same typed interface it would from a
+    regular text message.  Uses the shared :data:`bot.registry.registry` for
+    dispatch so new commands are automatically available without editing this
+    module.
     """
     message = _build_synthetic_message(callback_query, command)
-    chat_id = message["chat"].get("id")
+    chat_id = message.chat.id
 
     # Acknowledge the button press immediately so the spinner disappears.
     await answer_callback_query(cb_id, f"Running {command}…")

@@ -1,3 +1,9 @@
+"""Role-Based Access Control engine backed by local JSON flat-files.
+
+Permissions are checked via action-slug lookup (not rank-level comparison).
+All writes to ``db_users.json`` use atomic ``tempfile`` + ``os.replace``.
+"""
+
 import asyncio
 import json
 import os

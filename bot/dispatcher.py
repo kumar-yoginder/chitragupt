@@ -8,7 +8,10 @@ never block the bot from receiving new messages.
 
 import asyncio
 
+from pydantic import ValidationError
+
 from config import BOT_TOKEN, SUPER_ADMINS
+from sdk.models import Update
 from core.identity import get_identity
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC
@@ -18,45 +21,58 @@ from bot.telegram import get_updates
 # Import handlers module so @registry.register decorators execute.
 import bot.handlers as _handlers  # noqa: F401
 from bot.callbacks import handle_callback_query
-from bot.handlers import _extract_user_metadata, _pending_metadata, handle_metadata_upload
+from bot.handlers import _extract_user_metadata, _PENDING_METADATA, handle_metadata_upload
 
 logger = ChitraguptLogger.get_logger()
 
 
 async def process_update(rbac: RBAC, update: dict) -> None:
-    """Dispatch a single Telegram update to the appropriate handler."""
+    """Dispatch a single Telegram update to the appropriate handler.
+
+    Identity is resolved via :func:`core.identity.get_identity` **before**
+    any handler dispatch — including callback queries — so the canonical
+    identity function is always the single entry point.
+    """
     update_id = update.get("update_id")
 
-    # Handle callback queries (inline button presses) first
-    callback_query = update.get("callback_query")
-    if callback_query:
-        logger.debug("Processing callback_query", extra={"update_id": update_id})
-        await handle_callback_query(rbac, callback_query)
-        return
-
-    message = (
-        update.get("message")
-        or update.get("edited_message")
-        or update.get("channel_post")
-        or update.get("edited_channel_post")
-    )
-    if not message:
-        logger.debug("Update has no message — skipping", extra={"update_id": update_id})
-        return
-
+    # ── Resolve identity first (core layer, works with raw dict) ─────────
     user_id = get_identity(update)
     if user_id is None:
         logger.debug("Could not resolve identity, skipping", extra={"update_id": update_id})
         return
 
+    # ── Parse raw dict into SDK Update model for typed access ────────────
+    try:
+        sdk_update = Update.model_validate(update)
+    except ValidationError as exc:
+        logger.warning("Failed to parse update into SDK model", extra={"update_id": update_id, "error": str(exc)})
+        return
+
+    # ── Callback queries (inline button presses) ─────────────────────────
+    if sdk_update.callback_query:
+        logger.debug("Processing callback_query", extra={"update_id": update_id})
+        await handle_callback_query(rbac, sdk_update.callback_query, user_id)
+        return
+
+    # ── Message-based updates ────────────────────────────────────────────
+    message = (
+        sdk_update.message
+        or sdk_update.edited_message
+        or sdk_update.channel_post
+        or sdk_update.edited_channel_post
+    )
+    if not message:
+        logger.debug("Update has no message — skipping", extra={"update_id": update_id})
+        return
+
     # ── SUPER_ADMIN metadata sync ────────────────────────────────────────
     if user_id in SUPER_ADMINS:
-        from_user = message.get("from") or message.get("sender_chat") or {}
-        display_name = from_user.get("first_name", str(user_id))
-        meta = _extract_user_metadata(from_user)
+        entity = message.from_field or message.sender_chat
+        display_name = getattr(entity, "first_name", None) or str(user_id)
+        meta = _extract_user_metadata(entity)
         await rbac.sync_super_admin(user_id, display_name, **meta)
 
-    text = message.get("text", "")
+    text = message.text or ""
     logger.debug("Processing update", extra={"update_id": update_id, "user_id": user_id, "text": text[:80]})
 
     # ── Registry-based command dispatch ──────────────────────────────────
@@ -65,7 +81,7 @@ async def process_update(rbac: RBAC, update: dict) -> None:
         return
 
     # ── Non-command handlers (file uploads, etc.) ────────────────────────
-    if user_id in _pending_metadata and (message.get("photo") or message.get("document")):
+    if user_id in _PENDING_METADATA and (message.photo or message.document):
         await handle_metadata_upload(rbac, message, user_id)
     else:
         logger.debug("No command matched", extra={"update_id": update_id, "user_id": user_id})

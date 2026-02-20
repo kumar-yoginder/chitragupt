@@ -11,7 +11,7 @@ import os
 from typing import AsyncIterator
 
 from config import BASE_URL, EXIFTOOL_PATH
-from sdk.models import Document, PhotoSize
+from sdk.models import Chat, Document, Message, PhotoSize, User
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC, USER_META_KEYS
 from bot.registry import registry
@@ -23,16 +23,16 @@ from bot.telegram import (
 logger = ChitraguptLogger.get_logger()
 
 # ── Conversation state: users awaiting image upload for /metadata ────────────
-_pending_metadata: set[int] = set()
+_PENDING_METADATA: set[int] = set()
 
 
 @registry.register("/start", action="view_help",
                     description="Register and request access")
-async def handle_start(rbac: RBAC, message: dict, user_id: int) -> None:
+async def handle_start(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /start — register the user as Guest and alert SuperAdmins."""
-    chat_id = message["chat"]["id"]
-    from_user = message.get("from", {})
-    display_name = from_user.get("first_name", str(user_id))
+    chat_id = message.chat.id
+    from_user = message.from_field
+    display_name = from_user.first_name if from_user else str(user_id)
     logger.info("User invoked /start", extra={"user_id": user_id, "chat_id": chat_id, "command": "/start"})
 
     existing = rbac.users.get(str(user_id))
@@ -79,9 +79,9 @@ async def handle_start(rbac: RBAC, message: dict, user_id: int) -> None:
 
 @registry.register("/help", action="view_help",
                     description="Show available commands")
-async def handle_help(rbac: RBAC, message: dict, user_id: int) -> None:
+async def handle_help(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /help — show commands the user is permitted to use as inline buttons."""
-    chat_id = message["chat"]["id"]
+    chat_id = message.chat.id
     logger.info("User invoked /help", extra={"user_id": user_id, "chat_id": chat_id, "command": "/help"})
 
     buttons: list[list[dict]] = []
@@ -99,9 +99,9 @@ async def handle_help(rbac: RBAC, message: dict, user_id: int) -> None:
 
 @registry.register("/status", action="view_help",
                     description="View your rank and permissions")
-async def handle_status(rbac: RBAC, message: dict, user_id: int) -> None:
+async def handle_status(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /status — show the user's rank level and permissions."""
-    chat_id = message["chat"]["id"]
+    chat_id = message.chat.id
     logger.info("User invoked /status", extra={"user_id": user_id, "chat_id": chat_id, "command": "/status"})
 
     level = rbac.get_user_level(user_id)
@@ -122,22 +122,22 @@ async def handle_status(rbac: RBAC, message: dict, user_id: int) -> None:
                     description="End your session", needs_rbac=False)
 @registry.register("/exit", action="view_help",
                     description="End your session", needs_rbac=False)
-async def handle_stop(message: dict, user_id: int) -> None:
+async def handle_stop(message: Message, user_id: int) -> None:
     """Handle /stop and /exit — session termination."""
-    chat_id = message["chat"]["id"]
+    chat_id = message.chat.id
     logger.info("User invoked /stop or /exit", extra={"user_id": user_id, "chat_id": chat_id, "command": "/stop"})
     await send_message(chat_id, "👋 Session ended. Use /start to begin again.")
 
 
 @registry.register("/kick", action="kick_user",
                     description="Kick a user from the chat")
-async def handle_kick(rbac: RBAC, message: dict, user_id: int) -> None:
+async def handle_kick(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle the /kick command.
 
     Usage: /kick <user_id>
     Requires the 'kick_user' action permission.
     """
-    chat_id = message["chat"]["id"]
+    chat_id = message.chat.id
     logger.info("User invoked /kick", extra={"user_id": user_id, "chat_id": chat_id, "command": "/kick"})
 
     if not rbac.has_permission(user_id, "kick_user"):
@@ -145,7 +145,7 @@ async def handle_kick(rbac: RBAC, message: dict, user_id: int) -> None:
         await send_message(chat_id, "⛔ You do not have permission to kick users.")
         return
 
-    parts = message.get("text", "").split()
+    parts = (message.text or "").split()
     if len(parts) < 2:
         await send_message(chat_id, "Usage: /kick <user_id>")
         return
@@ -180,14 +180,14 @@ async def handle_kick(rbac: RBAC, message: dict, user_id: int) -> None:
 
 @registry.register("/clear", action="view_help",
                     description="Clear chat history with the bot", needs_rbac=False)
-async def handle_clear(message: dict, user_id: int) -> None:
+async def handle_clear(message: Message, user_id: int) -> None:
     """Handle /clear — bulk-delete all messages from current down to 1.
 
     Builds the full range of message IDs (current_msg_id → 1) and sends
     them to Telegram's ``deleteMessages`` endpoint in batches of 100.
     """
-    chat_id = message["chat"]["id"]
-    current_msg_id = message.get("message_id", 0)
+    chat_id = message.chat.id
+    current_msg_id = message.message_id
     logger.info("User invoked /clear", extra={"user_id": user_id, "chat_id": chat_id, "command": "/clear", "message_id": current_msg_id})
 
     if not current_msg_id:
@@ -268,7 +268,7 @@ class ExifToolRunner:
 
 
 # Module-level singleton — one ExifTool runner for the whole process.
-_exiftool = ExifToolRunner(EXIFTOOL_PATH)
+_EXIFTOOL = ExifToolRunner(EXIFTOOL_PATH)
 
 
 @contextlib.asynccontextmanager
@@ -291,25 +291,24 @@ async def _temp_file(directory: str, filename: str) -> AsyncIterator[str]:
                 logger.error("Failed to clean up temp file", extra={"path": path, "error": str(exc)})
 
 
-def _resolve_file_id(message: dict) -> str | None:
+def _resolve_file_id(message: Message) -> str | None:
     """Extract the ``file_id`` from a message containing a photo or document.
 
-    Uses SDK :class:`~sdk.models.PhotoSize` and :class:`~sdk.models.Document`
-    models for structured parsing instead of raw dictionary access.
+    Uses typed SDK :class:`~sdk.models.PhotoSize` and :class:`~sdk.models.Document`
+    attributes from the :class:`~sdk.models.Message` model directly.
     """
-    if message.get("photo"):
-        photos = [PhotoSize(**p) for p in message["photo"]]
-        return photos[-1].file_id
-    if message.get("document"):
-        return Document(**message["document"]).file_id
+    if message.photo:
+        return message.photo[-1].file_id
+    if message.document:
+        return message.document.file_id
     return None
 
 
 @registry.register("/metadata", action="extract_metadata",
                     description="Extract EXIF metadata from an image")
-async def handle_metadata(rbac: RBAC, message: dict, user_id: int) -> None:
+async def handle_metadata(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /metadata — prompt the user to upload an image for EXIF extraction."""
-    chat_id = message["chat"]["id"]
+    chat_id = message.chat.id
     logger.info("User invoked /metadata", extra={"user_id": user_id, "chat_id": chat_id, "command": "/metadata"})
 
     if not rbac.has_permission(user_id, "extract_metadata"):
@@ -317,7 +316,7 @@ async def handle_metadata(rbac: RBAC, message: dict, user_id: int) -> None:
         await send_message(chat_id, "⛔ You do not have permission to extract metadata.")
         return
 
-    _pending_metadata.add(user_id)
+    _PENDING_METADATA.add(user_id)
     await send_message(
         chat_id,
         "📸 Please upload an image (as a photo or uncompressed document) "
@@ -325,18 +324,18 @@ async def handle_metadata(rbac: RBAC, message: dict, user_id: int) -> None:
     )
 
 
-async def handle_metadata_upload(rbac: RBAC, message: dict, user_id: int) -> None:
+async def handle_metadata_upload(rbac: RBAC, message: Message, user_id: int) -> None:
     """Process a photo/document upload for EXIF metadata extraction.
 
     Orchestrates the pipeline: permission check → file-ID resolution →
     Telegram file download → ExifTool extraction → formatted response.
     Each step delegates to a dedicated helper or class method.
     """
-    chat_id = message["chat"]["id"]
+    chat_id = message.chat.id
 
-    if user_id not in _pending_metadata:
+    if user_id not in _PENDING_METADATA:
         return
-    _pending_metadata.discard(user_id)
+    _PENDING_METADATA.discard(user_id)
 
     # Re-check permission (belt-and-suspenders)
     if not rbac.has_permission(user_id, "extract_metadata"):
@@ -365,9 +364,9 @@ async def handle_metadata_upload(rbac: RBAC, message: dict, user_id: int) -> Non
             await asyncio.to_thread(_write_binary_file, local_path, file_bytes)
             logger.info("Downloaded file", extra={"user_id": user_id, "local_path": local_path, "file_id": file_id})
 
-            metadata = await _exiftool.extract(local_path)
+            metadata = await _EXIFTOOL.extract(local_path)
 
-        await send_message(chat_id, _exiftool.format_response(metadata), parse_mode="Markdown")
+        await send_message(chat_id, _EXIFTOOL.format_response(metadata), parse_mode="Markdown")
         logger.info("Metadata extracted and sent", extra={"user_id": user_id, "chat_id": chat_id, "command": "/metadata", "key_count": len(metadata)})
 
     except RuntimeError as exc:
@@ -387,11 +386,17 @@ def _write_binary_file(path: str, data: bytes) -> None:
         fh.write(data)
 
 
-def _extract_user_metadata(from_user: dict) -> dict:
-    """Extract rich metadata fields from a Telegram ``from`` object."""
+def _extract_user_metadata(entity: User | Chat | None) -> dict:
+    """Extract rich metadata fields from an SDK User or Chat model.
+
+    Uses ``getattr`` to safely access fields that may not exist on all model
+    types (e.g. ``language_code`` only exists on :class:`~sdk.models.User`).
+    """
     meta: dict = {}
+    if entity is None:
+        return meta
     for key in USER_META_KEYS:
-        val = from_user.get(key)
+        val = getattr(entity, key, None)
         if val is not None:
             meta[key] = val
     return meta
