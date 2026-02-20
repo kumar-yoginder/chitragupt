@@ -389,8 +389,11 @@ def _write_binary_file(path: str, data: bytes) -> None:
 def _extract_user_metadata(entity: User | Chat | None) -> dict:
     """Extract rich metadata fields from an SDK User or Chat model.
 
-    Uses ``getattr`` to safely access fields that may not exist on all model
-    types (e.g. ``language_code`` only exists on :class:`~sdk.models.User`).
+    Iterates over :data:`core.rbac.USER_META_KEYS` (``username``,
+    ``first_name``, ``last_name``, ``language_code``, ``is_premium``,
+    ``is_special``) using ``getattr`` so fields that only exist on
+    :class:`~sdk.models.User` (e.g. ``language_code``) safely return
+    ``None`` when called on a :class:`~sdk.models.Chat` instance.
     """
     meta: dict = {}
     if entity is None:

@@ -18,7 +18,9 @@ def _build_synthetic_message(callback_query: CallbackQuery, text: str) -> Messag
     """Build a minimal SDK :class:`~sdk.models.Message` from a callback query.
 
     Command handlers receive the same typed interface they would from a
-    regular text message.
+    regular text message.  Fallback values (``message_id=0``, ``date=0``,
+    a private chat with ``id=0``) are used only when the callback query
+    has no attached message — an edge case for inline-mode callbacks.
     """
     cb_message = callback_query.message
     return Message(
