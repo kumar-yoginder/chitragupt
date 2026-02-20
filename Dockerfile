@@ -35,9 +35,13 @@ COPY . .
 # read+execute access to everything.
 # data/ and logs/ permissions are fixed at runtime by entrypoint.sh
 # because bind-mounted volumes override build-time ownership.
-RUN chown -R root:chitragupt_group /app \
+# temp/ is container-local (not bind-mounted), so fix it at build time
+RUN mkdir -p /app/temp \
+    && chown -R root:chitragupt_group /app \
     && chmod -R a+rX /app \
-    && chmod +x /app/entrypoint.sh
+    && chmod +x /app/entrypoint.sh \
+    && chown chitragupt_user:chitragupt_group /app/temp \
+    && chmod 755 /app/temp
 
 # Ensure the venv Python is on PATH
 ENV PATH="/app/venv/bin:${PATH}"
