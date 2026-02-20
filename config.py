@@ -61,10 +61,9 @@ def _resolve_exiftool_path() -> str:
 
 EXIFTOOL_PATH: str = _resolve_exiftool_path()
 
-# Deferred import to avoid circular dependency (logger imports nothing from config).
-from core.logger import ChitraguptLogger as _CL  # noqa: E402
+from core.logger import ChitraguptLogger
 
-_logger = _CL.get_logger()
+_logger = ChitraguptLogger.get_logger()
 if BOT_TOKEN:
     _logger.info("Config loaded — BOT_TOKEN is set, BASE_URL ready")
 else:

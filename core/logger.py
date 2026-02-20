@@ -13,7 +13,30 @@ from typing import Optional
 
 
 class _JsonFormatter(logging.Formatter):
-    """Format every log record as a single-line JSON object."""
+    """Format every log record as a single-line JSON object.
+
+    Standard fields (timestamp, level, logger, message, module, func_name)
+    are always present.  Any *extra* key-value pairs passed via the ``extra``
+    parameter of a logging call are merged into the JSON object automatically,
+    giving callers an easy way to attach operation-specific context such as
+    ``user_id``, ``chat_id``, ``command``, ``action``, ``target_id``, etc.
+
+    Example::
+
+        logger.info(
+            "User kicked",
+            extra={"user_id": 100, "target_id": 999, "chat_id": 42, "command": "/kick"},
+        )
+
+    Produces::
+
+        {"timestamp": "…", "level": "INFO", …, "user_id": 100, "target_id": 999, …}
+    """
+
+    # Keys that belong to the standard LogRecord — everything else is extra.
+    _BUILTIN_ATTRS: frozenset[str] = frozenset(vars(logging.LogRecord(
+        name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None,
+    )))
 
     def format(self, record: logging.LogRecord) -> str:
         """Serialize *record* to a JSON string with IAM-relevant keys."""
@@ -27,7 +50,13 @@ class _JsonFormatter(logging.Formatter):
             "module": record.module,
             "func_name": record.funcName,
         }
-        return json.dumps(log_entry, ensure_ascii=False)
+
+        # Merge caller-supplied extra fields into the JSON payload.
+        for key, value in record.__dict__.items():
+            if key not in self._BUILTIN_ATTRS and key not in log_entry:
+                log_entry[key] = value
+
+        return json.dumps(log_entry, ensure_ascii=False, default=str)
 
 
 class ChitraguptLogger:

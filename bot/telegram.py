@@ -10,7 +10,8 @@ import json
 
 import requests
 
-from config import BASE_URL
+from config import BASE_URL, BOT_TOKEN
+from sdk.models import File as TelegramFile
 from core.logger import ChitraguptLogger
 
 logger = ChitraguptLogger.get_logger()
@@ -36,10 +37,10 @@ async def get_updates(offset: int | None = None) -> dict:
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            logger.error("getUpdates JSON decode error: %s", exc)
+            logger.error("getUpdates JSON decode error", extra={"api_endpoint": "getUpdates", "error": str(exc)})
             return {"ok": False, "result": []}
     except requests.RequestException as exc:
-        logger.error("getUpdates error: %s", exc)
+        logger.error("getUpdates request error", extra={"api_endpoint": "getUpdates", "error": str(exc)})
         return {"ok": False, "result": []}
 
 
@@ -54,7 +55,7 @@ async def send_message(
     Optionally include an InlineKeyboardMarkup via *reply_markup* and/or
     a *parse_mode* (``"Markdown"``, ``"MarkdownV2"``, ``"HTML"``).
     """
-    logger.debug("Sending message to chat %s: %s", chat_id, text[:80])
+    logger.debug("Sending message", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "text_preview": text[:80]})
     payload: dict = {"chat_id": chat_id, "text": text}
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
@@ -70,13 +71,13 @@ async def send_message(
         response.raise_for_status()
         data = response.json()
         if not data.get("ok"):
-            logger.warning("sendMessage Telegram error: %s", data)
+            logger.warning("sendMessage Telegram error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "api_response": data})
         else:
-            logger.info("Message sent to chat %s", chat_id)
+            logger.info("Message sent", extra={"chat_id": chat_id, "api_endpoint": "sendMessage"})
     except requests.HTTPError as exc:
-        logger.error("sendMessage HTTP error: %s (status=%s)", exc, exc.response.status_code)
+        logger.error("sendMessage HTTP error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "status_code": exc.response.status_code, "error": str(exc)})
     except requests.RequestException as exc:
-        logger.error("sendMessage error: %s", exc)
+        logger.error("sendMessage request error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "error": str(exc)})
 
 
 async def delete_message(chat_id: int, message_id: int) -> bool:
@@ -119,11 +120,11 @@ async def delete_messages(chat_id: int, message_ids: list[int]) -> int:
             data = response.json()
             if data.get("ok"):
                 deleted += len(batch)
-                logger.debug("deleteMessages ok for %d IDs in chat %s", len(batch), chat_id)
+                logger.debug("deleteMessages batch ok", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "batch_size": len(batch)})
             else:
-                logger.warning("deleteMessages failed for chat %s: %s", chat_id, data)
+                logger.warning("deleteMessages batch failed", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "api_response": data})
         except requests.RequestException as exc:
-            logger.error("deleteMessages error for chat %s: %s", chat_id, exc)
+            logger.error("deleteMessages request error", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "error": str(exc)})
     return deleted
 
 
@@ -141,4 +142,49 @@ async def answer_callback_query(callback_query_id: str, text: str | None = None)
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        logger.error("answerCallbackQuery error: %s", exc)
+        logger.error("answerCallbackQuery request error", extra={"api_endpoint": "answerCallbackQuery", "callback_query_id": callback_query_id, "error": str(exc)})
+
+
+# ── File download helpers ────────────────────────────────────────────────────
+
+
+async def get_file_info(file_id: str) -> TelegramFile | None:
+    """Resolve a Telegram ``file_id`` to a :class:`~sdk.models.File` model.
+
+    Calls the ``getFile`` API and parses the result into a Pydantic model.
+    Returns ``None`` when the API call fails or Telegram returns an error.
+    """
+    try:
+        resp = await make_request(
+            "get",
+            f"{BASE_URL}/getFile",
+            params={"file_id": file_id},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return TelegramFile(**data["result"])
+        logger.warning("getFile failed", extra={"api_endpoint": "getFile", "file_id": file_id, "api_response": data})
+        return None
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        logger.error("getFile request error", extra={"api_endpoint": "getFile", "file_id": file_id, "error": str(exc)})
+        return None
+
+
+async def download_file(telegram_file_path: str) -> bytes:
+    """Download raw bytes from the Telegram file CDN.
+
+    Args:
+        telegram_file_path: The ``file_path`` field from a :class:`~sdk.models.File`.
+
+    Returns:
+        The file content as raw bytes.
+
+    Raises:
+        requests.HTTPError: If the HTTP response status is not 2xx.
+        requests.RequestException: On transport-level failures.
+    """
+    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{telegram_file_path}"
+    resp = await make_request("get", url, timeout=30)
+    resp.raise_for_status()
+    return resp.content

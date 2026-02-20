@@ -7,7 +7,8 @@ corresponding handler is invoked directly — no need to re-type the command.
 
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC
-from bot.telegram import send_message, answer_callback_query
+from bot.registry import registry
+from bot.telegram import answer_callback_query, send_message
 
 logger = ChitraguptLogger.get_logger()
 
@@ -33,11 +34,11 @@ async def handle_callback_query(rbac: RBAC, callback_query: dict) -> None:
     chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
 
     if user_id is None or chat_id is None:
-        logger.warning("Callback query missing identity or chat: %s", callback_query)
+        logger.warning("Callback query missing identity or chat", extra={"callback_query": callback_query})
         await answer_callback_query(cb_id, "❌ Could not process.")
         return
 
-    logger.info("Callback query from user %s: %s", user_id, data)
+    logger.info("Callback query received", extra={"user_id": user_id, "chat_id": chat_id, "callback_data": data})
 
     # ── Approval / rejection flow (SuperAdmin buttons) ───────────────────
     if ":" in data and data.split(":")[0] in ("approve_member", "promote_mod", "reject"):
@@ -50,7 +51,7 @@ async def handle_callback_query(rbac: RBAC, callback_query: dict) -> None:
         return
 
     # Fallback — unknown callback
-    logger.debug("Unknown callback data '%s' from user %s", data, user_id)
+    logger.debug("Unknown callback data", extra={"user_id": user_id, "callback_data": data})
     await answer_callback_query(cb_id)
 
 
@@ -65,41 +66,17 @@ async def _handle_command_callback(
 
     A synthetic message is built from the callback query so that each
     handler receives the same interface it would from a regular text message.
+    Uses the shared :data:`bot.registry.registry` for dispatch so new
+    commands are automatically available without editing this module.
     """
-    # Lazy imports to avoid circular dependency with handlers.py
-    from bot.handlers import (
-        handle_start,
-        handle_help,
-        handle_status,
-        handle_stop,
-        handle_kick,
-        handle_clear,
-        handle_metadata,
-    )
-
     message = _build_synthetic_message(callback_query, command)
     chat_id = message["chat"].get("id")
 
     # Acknowledge the button press immediately so the spinner disappears.
     await answer_callback_query(cb_id, f"Running {command}…")
 
-    if command == "/start":
-        await handle_start(rbac, message, user_id)
-    elif command == "/help":
-        await handle_help(rbac, message, user_id)
-    elif command == "/status":
-        await handle_status(rbac, message, user_id)
-    elif command in ("/stop", "/exit"):
-        await handle_stop(message, user_id)
-    elif command == "/kick":
-        # /kick requires a target user_id argument — prompt the user.
-        await send_message(chat_id, "Usage: /kick <user_id>\nPlease type the command with the target user ID.")
-    elif command == "/clear":
-        await handle_clear(message, user_id)
-    elif command == "/metadata":
-        await handle_metadata(rbac, message, user_id)
-    else:
-        logger.debug("No handler mapped for command callback '%s'", command)
+    if not await registry.dispatch(command, rbac, message, user_id):
+        logger.debug("No handler mapped for command callback", extra={"command": command, "user_id": user_id})
         await send_message(chat_id, f"⚠️ Unknown command: {command}")
 
 
@@ -112,13 +89,13 @@ async def _handle_approval_callback(
     try:
         target_id = int(target_id_str)
     except ValueError:
-        logger.error("Invalid target_id in callback data: %s", data)
+        logger.error("Invalid target_id in callback data", extra={"callback_data": data, "admin_id": admin_id})
         await answer_callback_query(cb_id, "❌ Invalid user data.")
         return
 
     # Permission gate — only users with manage_users (or wildcard) may act
     if not rbac.has_permission(admin_id, "manage_users"):
-        logger.warning("Unauthorised approval attempt by user %s", admin_id)
+        logger.warning("Unauthorised approval attempt", extra={"admin_id": admin_id, "action": "manage_users", "callback_data": data})
         await answer_callback_query(cb_id, "⛔ You do not have permission to manage users.")
         return
 
@@ -127,17 +104,17 @@ async def _handle_approval_callback(
         await answer_callback_query(cb_id, f"✅ User {target_id} approved as Member.")
         await send_message(admin_chat_id, f"✅ User {target_id} has been approved as Member (Level 10).")
         await send_message(target_id, "🎉 Your access has been approved! You are now a Member.")
-        logger.info("Admin %s approved user %s as Member", admin_id, target_id)
+        logger.info("Admin approved user as Member", extra={"admin_id": admin_id, "target_id": target_id, "action": "approve_member", "new_level": 10})
 
     elif action == "promote_mod":
         await rbac.set_user_level(target_id, 50)
         await answer_callback_query(cb_id, f"🛡️ User {target_id} promoted to Moderator.")
         await send_message(admin_chat_id, f"🛡️ User {target_id} has been promoted to Moderator (Level 50).")
         await send_message(target_id, "🎉 You have been promoted to Moderator!")
-        logger.info("Admin %s promoted user %s to Moderator", admin_id, target_id)
+        logger.info("Admin promoted user to Moderator", extra={"admin_id": admin_id, "target_id": target_id, "action": "promote_mod", "new_level": 50})
 
     elif action == "reject":
         await answer_callback_query(cb_id, f"❌ User {target_id} rejected.")
         await send_message(admin_chat_id, f"❌ User {target_id} has been rejected.")
         await send_message(target_id, "❌ Your access request has been rejected by an admin.")
-        logger.info("Admin %s rejected user %s", admin_id, target_id)
+        logger.info("Admin rejected user", extra={"admin_id": admin_id, "target_id": target_id, "action": "reject"})

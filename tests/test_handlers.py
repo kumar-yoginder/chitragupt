@@ -327,61 +327,75 @@ class TestCallbackApproval:
 
 
 class TestProcessUpdate:
-    """Validate that process_update dispatches to the right handlers."""
+    """Validate that process_update dispatches to the right handlers via the registry."""
 
     @pytest.mark.asyncio
-    @patch("bot.dispatcher.handle_start", new_callable=AsyncMock)
-    async def test_dispatches_start(self, mock_handler, rbac) -> None:
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_dispatches_start(self, mock_send, rbac) -> None:
         from bot.dispatcher import process_update
 
-        update = _make_update(400, "/start")
+        update = _make_update(999, "/start")
         await process_update(rbac, update)
-        mock_handler.assert_called_once()
+        # /start for an unknown user sends a welcome message
+        assert mock_send.called
+        first_text = mock_send.call_args_list[0][0][1]
+        assert "Welcome" in first_text
 
     @pytest.mark.asyncio
-    @patch("bot.dispatcher.handle_help", new_callable=AsyncMock)
-    async def test_dispatches_help(self, mock_handler, rbac) -> None:
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_dispatches_help(self, mock_send, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/help")
         await process_update(rbac, update)
-        mock_handler.assert_called_once()
+        assert mock_send.called
 
     @pytest.mark.asyncio
-    @patch("bot.dispatcher.handle_status", new_callable=AsyncMock)
-    async def test_dispatches_status(self, mock_handler, rbac) -> None:
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_dispatches_status(self, mock_send, rbac) -> None:
         from bot.dispatcher import process_update
 
-        update = _make_update(400, "/status")
+        update = _make_update(300, "/status")
         await process_update(rbac, update)
-        mock_handler.assert_called_once()
+        text = mock_send.call_args[0][1]
+        assert "Moderator" in text
 
     @pytest.mark.asyncio
-    @patch("bot.dispatcher.handle_stop", new_callable=AsyncMock)
-    async def test_dispatches_stop(self, mock_handler, rbac) -> None:
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_dispatches_stop(self, mock_send, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/stop")
         await process_update(rbac, update)
-        mock_handler.assert_called_once()
+        text = mock_send.call_args[0][1]
+        assert "Session ended" in text
 
     @pytest.mark.asyncio
-    @patch("bot.dispatcher.handle_stop", new_callable=AsyncMock)
-    async def test_dispatches_exit(self, mock_handler, rbac) -> None:
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_dispatches_exit(self, mock_send, rbac) -> None:
         from bot.dispatcher import process_update
 
         update = _make_update(400, "/exit")
         await process_update(rbac, update)
-        mock_handler.assert_called_once()
+        text = mock_send.call_args[0][1]
+        assert "Session ended" in text
 
     @pytest.mark.asyncio
-    @patch("bot.dispatcher.handle_kick", new_callable=AsyncMock)
-    async def test_dispatches_kick(self, mock_handler, rbac) -> None:
+    @patch("bot.handlers.make_request", new_callable=AsyncMock)
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_dispatches_kick(self, mock_send, mock_req, rbac) -> None:
+        from unittest.mock import MagicMock
         from bot.dispatcher import process_update
 
-        update = _make_update(400, "/kick 123")
+        # make_request returns a Response-like object (sync .json())
+        fake_response = MagicMock()
+        fake_response.json.return_value = {"ok": True}
+        mock_req.return_value = fake_response
+
+        update = _make_update(100, "/kick 999")
         await process_update(rbac, update)
-        mock_handler.assert_called_once()
+        # SuperAdmin (100) can kick — should call the API
+        assert mock_req.called
 
     @pytest.mark.asyncio
     @patch("bot.dispatcher.handle_callback_query", new_callable=AsyncMock)

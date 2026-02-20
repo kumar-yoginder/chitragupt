@@ -18,13 +18,13 @@ def get_identity(update: dict) -> int | None:
         sender_chat = cb_message.get("sender_chat")
         if sender_chat:
             identity = sender_chat.get("id")
-            logger.info("Resolved callback anonymous identity: %s (sender_chat)", identity)
+            logger.info("Resolved callback anonymous identity", extra={"identity": identity, "source": "sender_chat"})
             return identity
 
         from_user = callback_query.get("from")
         if from_user:
             identity = from_user.get("id")
-            logger.info("Resolved callback user identity: %s", identity)
+            logger.info("Resolved callback user identity", extra={"identity": identity, "source": "from"})
             return identity
 
     # ── message-based updates ────────────────────────────────────────────
@@ -35,21 +35,21 @@ def get_identity(update: dict) -> int | None:
         or update.get("edited_channel_post")
     )
     if not message:
-        logger.debug("No message object found in update %s", update.get("update_id"))
+        logger.debug("No message object found in update", extra={"update_id": update.get("update_id")})
         return None
 
     # Anonymous admins post as the group itself; sender_chat.id is negative.
     sender_chat = message.get("sender_chat")
     if sender_chat:
         identity = sender_chat.get("id")
-        logger.info("Resolved anonymous/channel identity: %s (sender_chat)", identity)
+        logger.info("Resolved anonymous/channel identity", extra={"identity": identity, "source": "sender_chat"})
         return identity
 
     from_user = message.get("from")
     if from_user:
         identity = from_user.get("id")
-        logger.info("Resolved user identity: %s", identity)
+        logger.info("Resolved user identity", extra={"identity": identity, "source": "from"})
         return identity
 
-    logger.warning("Could not resolve identity from update %s", update.get("update_id"))
+    logger.warning("Could not resolve identity from update", extra={"update_id": update.get("update_id")})
     return None
