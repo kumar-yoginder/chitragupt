@@ -6,6 +6,7 @@ by the dispatcher in :mod:`bot.dispatcher`.
 
 import asyncio
 import contextlib
+import html
 import json
 import os
 from typing import AsyncIterator
@@ -293,18 +294,37 @@ class ExifToolRunner:
         return result
 
     @staticmethod
-    def format_response(metadata: dict) -> str:
-        """Format *metadata* as a Telegram-safe Markdown JSON code block.
+    def format_response(metadata: dict) -> list[str]:
+        """Format *metadata* as Telegram-safe HTML ``<pre>`` code blocks.
 
-        Truncates the output if it exceeds Telegram's 4096-character message
-        limit.
+        Uses HTML parse mode (not Markdown) so special characters like
+        ``_``, ``*``, and backticks in EXIF values are never misinterpreted
+        by Telegram's parser.
+
+        If the formatted output exceeds ``TELEGRAM_MSG_LIMIT`` it is split
+        into multiple message chunks so nothing is silently dropped.
+
+        Returns:
+            A list of HTML strings, each within the 4096-char limit.
         """
         formatted = json.dumps(metadata, indent=2, ensure_ascii=False)
-        code_block = f"```json\n{formatted}\n```"
-        if len(code_block) > ExifToolRunner.TELEGRAM_MSG_LIMIT:
-            max_len = ExifToolRunner.TELEGRAM_MSG_LIMIT - len("```json\n\n… (truncated)\n```")
-            code_block = f"```json\n{formatted[:max_len]}\n… (truncated)\n```"
-        return code_block
+        escaped = html.escape(formatted)
+
+        prefix = "<pre>"
+        suffix = "</pre>"
+        wrapper_len = len(prefix) + len(suffix)
+        max_content = ExifToolRunner.TELEGRAM_MSG_LIMIT - wrapper_len
+
+        if len(escaped) <= max_content:
+            return [f"{prefix}{escaped}{suffix}"]
+
+        # Split into chunks that fit within Telegram's limit
+        chunks: list[str] = []
+        while escaped:
+            slice_text = escaped[:max_content]
+            escaped = escaped[max_content:]
+            chunks.append(f"{prefix}{slice_text}{suffix}")
+        return chunks
 
 
 # Module-level singleton — one ExifTool runner for the whole process.
@@ -331,17 +351,22 @@ async def _temp_file(directory: str, filename: str) -> AsyncIterator[str]:
                 logger.error("Failed to clean up temp file", extra={"path": path, "error": str(exc)})
 
 
-def _resolve_file_id(message: Message) -> str | None:
+def _resolve_file_id(message: Message) -> tuple[str | None, bool]:
     """Extract the ``file_id`` from a message containing a photo or document.
 
     Uses typed SDK :class:`~sdk.models.PhotoSize` and :class:`~sdk.models.Document`
     attributes from the :class:`~sdk.models.Message` model directly.
+
+    Returns:
+        A tuple of ``(file_id, is_compressed)``.  *is_compressed* is ``True``
+        when the file came from Telegram's compressed ``photo`` array (which
+        strips most EXIF metadata on upload).
     """
-    if message.photo:
-        return message.photo[-1].file_id
     if message.document:
-        return message.document.file_id
-    return None
+        return message.document.file_id, False
+    if message.photo:
+        return message.photo[-1].file_id, True
+    return None, False
 
 
 @registry.register("/metadata", action="extract_metadata",
@@ -359,8 +384,10 @@ async def handle_metadata(rbac: RBAC, message: Message, user_id: int) -> None:
     _PENDING_METADATA.add(user_id)
     await send_message(
         chat_id,
-        "📸 Please upload an image (as a photo or uncompressed document) "
-        "to extract its EXIF metadata.",
+        "📸 Please upload an image to extract its EXIF metadata.\n\n"
+        "💡 For complete metadata, send the image as an <b>uncompressed document/file</b> "
+        "(tap the 📎 paperclip → File). Compressed photos lose most EXIF data.",
+        parse_mode="HTML",
     )
 
 
@@ -383,10 +410,20 @@ async def handle_metadata_upload(rbac: RBAC, message: Message, user_id: int) -> 
         return
 
     # ── Resolve file_id via SDK models ────────────────────────────────────
-    file_id = _resolve_file_id(message)
+    file_id, is_compressed = _resolve_file_id(message)
     if not file_id:
         await send_message(chat_id, "❌ Could not find a file in your message. Please try again with /metadata.")
         return
+
+    if is_compressed:
+        await send_message(
+            chat_id,
+            "⚠️ You sent this as a <b>compressed photo</b> — Telegram strips most "
+            "EXIF data during compression.\n"
+            "For complete metadata, re-send the image as an <b>uncompressed document/file</b> "
+            "(tap the 📎 paperclip → File).",
+            parse_mode="HTML",
+        )
 
     try:
         # Step 1 — resolve the Telegram-side file path using telegram helper
@@ -406,8 +443,11 @@ async def handle_metadata_upload(rbac: RBAC, message: Message, user_id: int) -> 
 
             metadata = await _EXIFTOOL.extract(local_path)
 
-        await send_message(chat_id, _EXIFTOOL.format_response(metadata), parse_mode="Markdown")
-        logger.info("Metadata extracted and sent", extra={"user_id": user_id, "chat_id": chat_id, "command": "/metadata", "key_count": len(metadata)})
+        # Send metadata (may require multiple messages for large payloads)
+        chunks = _EXIFTOOL.format_response(metadata)
+        for chunk in chunks:
+            await send_message(chat_id, chunk, parse_mode="HTML")
+        logger.info("Metadata extracted and sent", extra={"user_id": user_id, "chat_id": chat_id, "command": "/metadata", "key_count": len(metadata), "chunks": len(chunks)})
 
     except RuntimeError as exc:
         logger.error("ExifTool error", extra={"user_id": user_id, "chat_id": chat_id, "error": str(exc)})
