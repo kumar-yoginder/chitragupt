@@ -7,9 +7,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-      - SUPER_ADMINS=${SUPER_ADMINS}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

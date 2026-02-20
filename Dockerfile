@@ -27,15 +27,13 @@ COPY --from=builder /build/venv /app/venv
 # Copy application source code (read-only for the user later)
 COPY . .
 
-# Create data/ and logs/ directories owned by the app user with 755 permissions
+# Set root ownership for read-only app code, then grant the app user
+# write access only to data/ and logs/ (755)
 RUN mkdir -p /app/data /app/logs \
+    && chown -R root:chitragupt_group /app \
+    && chmod -R a+rX /app \
     && chown chitragupt_user:chitragupt_group /app/data /app/logs \
     && chmod 755 /app/data /app/logs
-
-# Make the rest of the application code read-only for the app user
-RUN chown -R root:chitragupt_group /app \
-    && chmod -R a+rX /app \
-    && chown chitragupt_user:chitragupt_group /app/data /app/logs
 
 # Ensure the venv Python is on PATH
 ENV PATH="/app/venv/bin:${PATH}"
