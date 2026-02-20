@@ -1,5 +1,8 @@
 # ── Stage 1: Builder ─────────────────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.12-alpine AS builder
+
+# Install build dependencies needed to compile C extensions (pydantic-core, etc.)
+RUN apk add --no-cache gcc musl-dev libffi-dev
 
 WORKDIR /build
 
