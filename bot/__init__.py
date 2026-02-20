@@ -15,7 +15,7 @@ from bot.handlers import (
     handle_status,
     handle_stop,
 )
-from bot.telegram import answer_callback_query, delete_message, delete_messages, get_updates, send_message
+from sdk.client import answer_callback_query, delete_message, delete_messages, get_updates, send_message
 
 __all__ = [
     # Registry

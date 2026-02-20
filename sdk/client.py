@@ -2,10 +2,18 @@
 
 All methods accept and return Pydantic models for strict type validation.
 HTTP calls use the ``requests`` library per project standards.
+
+The module also provides async free-function helpers (``make_request``,
+``get_updates``, ``send_message``, etc.) that offload blocking I/O via
+:func:`asyncio.to_thread`.  These were previously in ``bot/telegram.py``
+and are now consolidated here so every Telegram API call lives in the SDK.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json as _json
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 import requests
@@ -128,15 +136,17 @@ class ChitraguptClient:
 
     _DEFAULT_TIMEOUT: int = 10
 
-    def __init__(self, base_url: str, timeout: int = _DEFAULT_TIMEOUT) -> None:
+    def __init__(self, base_url: str, timeout: int = _DEFAULT_TIMEOUT, bot_token: str | None = None) -> None:
         """Create a new client bound to *base_url*.
 
         Args:
             base_url: Full Bot API base URL (e.g. ``https://api.telegram.org/bot<token>``).
             timeout: Default request timeout in seconds.
+            bot_token: Raw bot token, used for file-download URLs.
         """
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._bot_token = bot_token
 
     # ------------------------------------------------------------------
     #  Internal helpers
@@ -1200,3 +1210,207 @@ class ChitraguptClient:
             payload["inline_message_id"] = inline_message_id
         data = self._post("getGameHighScores", payload)
         return data
+
+
+# ── Module-level async helpers ───────────────────────────────────────────────
+#
+# Thin async wrappers around ``requests`` for polling updates, sending
+# messages, and acknowledging callback queries.  All blocking I/O is
+# offloaded via :func:`asyncio.to_thread` so the event loop is never
+# blocked.
+#
+# A lazily-initialised module-level :class:`ChitraguptClient` instance
+# carries the ``BASE_URL`` / ``BOT_TOKEN`` values from :mod:`config`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_sdk_logger = logging.getLogger("sdk.client")
+
+_default_client: ChitraguptClient | None = None
+
+
+def _get_default_client() -> ChitraguptClient:
+    """Return (and lazily create) the module-level client singleton."""
+    global _default_client
+    if _default_client is None:
+        from config import BASE_URL, BOT_TOKEN  # deferred to avoid circular imports
+        _default_client = ChitraguptClient(BASE_URL, bot_token=BOT_TOKEN)
+    return _default_client
+
+
+async def make_request(method: str, url: str, **kwargs: object) -> requests.Response:
+    """Run a :mod:`requests` call inside a thread to keep the event loop free.
+
+    *method* is the HTTP verb (``"get"``, ``"post"``, …).
+    """
+    func = getattr(requests, method.lower())
+    return await asyncio.to_thread(func, url, **kwargs)
+
+
+async def get_updates(offset: int | None = None) -> dict:
+    """Long-poll the Telegram Bot API for new updates."""
+    client = _get_default_client()
+    params: dict = {"timeout": 30}
+    if offset is not None:
+        params["offset"] = offset
+    try:
+        response = await make_request("get", f"{client._base_url}/getUpdates", params=params, timeout=35)
+        response.raise_for_status()
+        try:
+            return response.json()
+        except _json.JSONDecodeError as exc:
+            _sdk_logger.error("getUpdates JSON decode error: %s", exc)
+            return {"ok": False, "result": []}
+    except requests.RequestException as exc:
+        _sdk_logger.error("getUpdates request error: %s", exc)
+        return {"ok": False, "result": []}
+
+
+async def send_message(
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+    parse_mode: str | None = None,
+) -> None:
+    """Send a text message to a Telegram chat.
+
+    Optionally include an InlineKeyboardMarkup via *reply_markup* and/or
+    a *parse_mode* (``"Markdown"``, ``"MarkdownV2"``, ``"HTML"``).
+    """
+    client = _get_default_client()
+    _sdk_logger.debug("Sending message to chat_id=%s, text_preview=%.80s", chat_id, text)
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    try:
+        response = await make_request(
+            "post",
+            f"{client._base_url}/sendMessage",
+            json=payload,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not data.get("ok"):
+            _sdk_logger.warning("sendMessage Telegram error: chat_id=%s, response=%s", chat_id, data)
+        else:
+            _sdk_logger.info("Message sent to chat_id=%s", chat_id)
+    except requests.HTTPError as exc:
+        _sdk_logger.error("sendMessage HTTP error: chat_id=%s, status=%s, error=%s", chat_id, exc.response.status_code, exc)
+    except requests.RequestException as exc:
+        _sdk_logger.error("sendMessage request error: chat_id=%s, error=%s", chat_id, exc)
+
+
+async def delete_message(chat_id: int, message_id: int) -> bool:
+    """Delete a single message.  Returns True on success, False otherwise."""
+    client = _get_default_client()
+    try:
+        response = await make_request(
+            "post",
+            f"{client._base_url}/deleteMessage",
+            json={"chat_id": chat_id, "message_id": message_id},
+            timeout=10,
+        )
+        data = response.json()
+        return data.get("ok", False)
+    except requests.RequestException:
+        return False
+
+
+async def delete_messages(chat_id: int, message_ids: list[int]) -> int:
+    """Bulk-delete messages using Telegram's ``deleteMessages`` endpoint.
+
+    The API accepts 1–100 IDs per call.  If more than 100 are passed they
+    are sent in consecutive batches.  Returns the total number of messages
+    the API confirmed as deleted.
+    """
+    if not message_ids:
+        return 0
+
+    client = _get_default_client()
+    deleted = 0
+    batch_size = 100
+    for start in range(0, len(message_ids), batch_size):
+        batch = message_ids[start : start + batch_size]
+        try:
+            response = await make_request(
+                "post",
+                f"{client._base_url}/deleteMessages",
+                json={"chat_id": chat_id, "message_ids": batch},
+                timeout=10,
+            )
+            data = response.json()
+            if data.get("ok"):
+                deleted += len(batch)
+                _sdk_logger.debug("deleteMessages batch ok: chat_id=%s, batch_size=%d", chat_id, len(batch))
+            else:
+                _sdk_logger.warning("deleteMessages batch failed: chat_id=%s, response=%s", chat_id, data)
+        except requests.RequestException as exc:
+            _sdk_logger.error("deleteMessages request error: chat_id=%s, error=%s", chat_id, exc)
+    return deleted
+
+
+async def answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
+    """Acknowledge a callback query so the spinner disappears for the user."""
+    client = _get_default_client()
+    payload: dict = {"callback_query_id": callback_query_id}
+    if text is not None:
+        payload["text"] = text
+    try:
+        response = await make_request(
+            "post",
+            f"{client._base_url}/answerCallbackQuery",
+            json=payload,
+            timeout=10,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        _sdk_logger.error("answerCallbackQuery request error: cb_id=%s, error=%s", callback_query_id, exc)
+
+
+# ── File download helpers ────────────────────────────────────────────────────
+
+
+async def get_file_info(file_id: str) -> File | None:
+    """Resolve a Telegram ``file_id`` to a :class:`~sdk.models.File` model.
+
+    Calls the ``getFile`` API and parses the result into a Pydantic model.
+    Returns ``None`` when the API call fails or Telegram returns an error.
+    """
+    client = _get_default_client()
+    try:
+        resp = await make_request(
+            "get",
+            f"{client._base_url}/getFile",
+            params={"file_id": file_id},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return File(**data["result"])
+        _sdk_logger.warning("getFile failed: file_id=%s, response=%s", file_id, data)
+        return None
+    except (requests.RequestException, _json.JSONDecodeError) as exc:
+        _sdk_logger.error("getFile request error: file_id=%s, error=%s", file_id, exc)
+        return None
+
+
+async def download_file(telegram_file_path: str) -> bytes:
+    """Download raw bytes from the Telegram file CDN.
+
+    Args:
+        telegram_file_path: The ``file_path`` field from a :class:`~sdk.models.File`.
+
+    Returns:
+        The file content as raw bytes.
+
+    Raises:
+        requests.HTTPError: If the HTTP response status is not 2xx.
+        requests.RequestException: On transport-level failures.
+    """
+    client = _get_default_client()
+    url = f"https://api.telegram.org/file/bot{client._bot_token}/{telegram_file_path}"
+    resp = await make_request("get", url, timeout=30)
+    resp.raise_for_status()
+    return resp.content
