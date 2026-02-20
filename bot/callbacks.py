@@ -9,7 +9,7 @@ from sdk.models import CallbackQuery, Chat, Message
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC
 from bot.registry import registry
-from bot.telegram import answer_callback_query, send_message
+from sdk.client import answer_callback_query, send_message
 
 logger = ChitraguptLogger.get_logger()
 

@@ -15,7 +15,7 @@ from sdk.models import Chat, Document, Message, PhotoSize, User
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC, USER_META_KEYS
 from bot.registry import registry
-from bot.telegram import (
+from sdk.client import (
     delete_message, delete_messages, download_file,
     get_file_info, make_request, send_message,
 )

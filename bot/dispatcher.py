@@ -16,7 +16,7 @@ from core.identity import get_identity
 from core.logger import ChitraguptLogger
 from core.rbac import RBAC
 from bot.registry import registry
-from bot.telegram import get_updates
+from sdk.client import get_updates
 
 # Import handlers module so @registry.register decorators execute.
 import bot.handlers as _handlers  # noqa: F401
