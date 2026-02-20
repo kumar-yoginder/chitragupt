@@ -16,7 +16,8 @@ RUN python -m venv /build/venv \
 FROM python:3.12-alpine
 
 # Install only the bare-essential system dependencies
-RUN apk add --no-cache perl exiftool
+# su-exec: lightweight setuid for dropping root in the entrypoint
+RUN apk add --no-cache perl exiftool su-exec
 
 # Create a dedicated non-root user and group
 RUN addgroup -S chitragupt_group \
@@ -31,17 +32,16 @@ COPY --from=builder /build/venv /app/venv
 COPY . .
 
 # Set root ownership for read-only app code, then grant the app user
-# write access only to data/ and logs/ (755)
-RUN mkdir -p /app/data /app/logs \
-    && chown -R root:chitragupt_group /app \
+# read+execute access to everything.
+# data/ and logs/ permissions are fixed at runtime by entrypoint.sh
+# because bind-mounted volumes override build-time ownership.
+RUN chown -R root:chitragupt_group /app \
     && chmod -R a+rX /app \
-    && chown chitragupt_user:chitragupt_group /app/data /app/logs \
-    && chmod 755 /app/data /app/logs
+    && chmod +x /app/entrypoint.sh
 
 # Ensure the venv Python is on PATH
 ENV PATH="/app/venv/bin:${PATH}"
 
-# Drop all kernel capabilities
-USER chitragupt_user
-
+# Entrypoint fixes dir permissions then drops to chitragupt_user
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "main.py"]
