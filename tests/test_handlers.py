@@ -518,3 +518,108 @@ class TestAsyncLock:
             on_disk = json.load(f)
         for i in range(500, 520):
             assert str(i) in on_disk
+
+
+# ── /clear command ───────────────────────────────────────────────────────────
+
+
+def _make_clear_message(
+    user_id: int,
+    msg_id: int = 15,
+    chat_id: int = 1000,
+    chat_type: str = "private",
+) -> Message:
+    """Build a Message that simulates a /clear command."""
+    return Message(
+        message_id=msg_id,
+        date=0,
+        chat=Chat(id=chat_id, type=chat_type),
+        from_field=User(id=user_id, is_bot=False, first_name=f"User{user_id}"),
+        text="/clear",
+    )
+
+
+class TestHandleClear:
+    """Validate the /clear command — bulk message deletion flow."""
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.delete_message", new_callable=AsyncMock, return_value=True)
+    @patch("bot.handlers.send_message", new_callable=AsyncMock, return_value=99)
+    @patch("bot.handlers.delete_messages", new_callable=AsyncMock, return_value=15)
+    async def test_clear_private_chat(
+        self, mock_del_msgs, mock_send, mock_del_one, rbac
+    ) -> None:
+        """Any user can /clear in a private chat — no RBAC check needed."""
+        from bot.handlers import handle_clear
+
+        msg = _make_clear_message(400, msg_id=15, chat_type="private")
+        await handle_clear(rbac, msg, 400)
+
+        # delete_messages should receive IDs 15 → 1
+        mock_del_msgs.assert_awaited_once()
+        chat_id_arg, ids_arg = mock_del_msgs.call_args[0]
+        assert chat_id_arg == 1000
+        assert ids_arg == list(range(15, 0, -1))
+
+        # Confirmation message should be sent
+        mock_send.assert_awaited_once()
+        assert "Cleared" in mock_send.call_args[0][1]
+
+        # Confirmation message should be self-deleted
+        mock_del_one.assert_awaited_once_with(1000, 99)
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.delete_message", new_callable=AsyncMock)
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    @patch("bot.handlers.delete_messages", new_callable=AsyncMock)
+    async def test_clear_group_no_permission(
+        self, mock_del_msgs, mock_send, mock_del_one, rbac
+    ) -> None:
+        """A Member (level 10) lacks delete_msg in groups — should be denied."""
+        from bot.handlers import handle_clear
+
+        msg = _make_clear_message(400, chat_type="group")
+        await handle_clear(rbac, msg, 400)
+
+        # delete_messages must NOT have been called
+        mock_del_msgs.assert_not_awaited()
+        # Denial message should be sent
+        mock_send.assert_awaited_once()
+        assert "permission" in mock_send.call_args[0][1].lower()
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.delete_message", new_callable=AsyncMock, return_value=True)
+    @patch("bot.handlers.send_message", new_callable=AsyncMock, return_value=50)
+    @patch("bot.handlers.delete_messages", new_callable=AsyncMock, return_value=10)
+    async def test_clear_group_with_permission(
+        self, mock_del_msgs, mock_send, mock_del_one, rbac
+    ) -> None:
+        """A Moderator (level 50) has delete_msg — should succeed in groups."""
+        from bot.handlers import handle_clear
+
+        msg = _make_clear_message(300, msg_id=10, chat_type="supergroup")
+        await handle_clear(rbac, msg, 300)
+
+        # delete_messages should have been called
+        mock_del_msgs.assert_awaited_once()
+        # Confirmation sent
+        mock_send.assert_awaited_once()
+        assert "Cleared" in mock_send.call_args[0][1]
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.delete_message", new_callable=AsyncMock)
+    @patch("bot.handlers.send_message", new_callable=AsyncMock, return_value=None)
+    @patch("bot.handlers.delete_messages", new_callable=AsyncMock, return_value=5)
+    async def test_clear_no_self_delete_on_send_failure(
+        self, mock_del_msgs, mock_send, mock_del_one, rbac
+    ) -> None:
+        """If send_message returns None (failure), skip self-delete."""
+        from bot.handlers import handle_clear
+
+        msg = _make_clear_message(400, msg_id=5)
+        await handle_clear(rbac, msg, 400)
+
+        mock_del_msgs.assert_awaited_once()
+        mock_send.assert_awaited_once()
+        # delete_message should NOT be called because send_message returned None
+        mock_del_one.assert_not_awaited()

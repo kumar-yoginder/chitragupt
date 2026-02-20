@@ -23,9 +23,9 @@ chitragupt/
 │
 ├── bot/                        # Entry point & Telegram-specific logic
 │   ├── __init__.py
-│   ├── telegram.py             # Low-level Telegram helpers (get_updates, send_message, answer_callback_query)
-│   ├── handlers.py             # Slash-command handlers (/start, /help, /status, /kick, /stop, /exit)
+│   ├── handlers.py             # Slash-command handlers (/start, /help, /status, /kick, /stop, /exit, /clear, /metadata)
 │   ├── callbacks.py            # Inline-keyboard callback query handlers (approval flow)
+│   ├── registry.py             # Generic command registry — single source of truth for command → handler mapping
 │   └── dispatcher.py           # process_update() routing + run() polling loop
 │
 ├── core/                       # The "Brain" — framework-agnostic IAM engine
@@ -34,10 +34,10 @@ chitragupt/
 │   ├── logger.py               # ChitraguptLogger: Singleton JSON logger (console + rotating file)
 │   └── rbac.py                 # RBAC class: JSON-based permission checks, user level management, persistence
 │
-├── sdk/                        # OOP implementation from the Swagger spec
+├── sdk/                        # OOP implementation from the Swagger spec + async API helpers
 │   ├── __init__.py
 │   ├── models.py               # Pydantic (BaseModel) data models for every API schema
-│   ├── client.py               # ChitraguptClient: OOP service layer wrapping all API endpoints
+│   ├── client.py               # ChitraguptClient OOP service layer + module-level async helpers
 │   └── exceptions.py           # APIException base class for non-2xx responses
 │
 ├── data/                       # Persistence layer (JSON flat-files)
@@ -58,9 +58,9 @@ chitragupt/
 
 | Directory | Role | May import from | Must **never** contain |
 |-----------|------|-----------------|------------------------|
-| `bot/`    | Entry point & Telegram-specific logic (polling, command handlers, callback handlers) | `core/`, `config` | Raw dictionary parsing of Telegram payloads — use `sdk/` models instead. No RBAC logic; delegate to `core.rbac`. |
+| `bot/`    | Entry point & Telegram-specific logic (command handlers, callback handlers, dispatcher) | `core/`, `config`, `sdk/` | Raw dictionary parsing of Telegram payloads — use `sdk/` models instead. No RBAC logic; delegate to `core.rbac`. No direct `requests` calls — use `sdk.client` async helpers. |
 | `core/`   | The **Brain** of Chitragupt — entity resolution (`identity.py`), JSON-based permission logic (`rbac.py`), logging (`logger.py`) | stdlib only + `core.logger` | **No Telegram API calls.** No imports from `bot/` or `sdk/`. No HTTP requests. Only pure IAM logic. |
-| `sdk/`    | OOP implementation of Pydantic models and the `ChitraguptClient` service layer, derived from `swagger.yaml` | `sdk/` only (fully self-contained) | No business logic, no RBAC checks, no handler code. This package is a generated API wrapper — nothing else. |
+| `sdk/`    | OOP `ChitraguptClient` service layer (sync methods per API endpoint) + module-level async free functions (`send_message`, `get_updates`, `delete_messages`, etc.) consumed by `bot/`. Derived from `swagger.yaml`. | `sdk/` only + `config` (lazy import for async helpers) | No business logic, no RBAC checks, no handler code. |
 | `data/`   | Persistence layer — JSON flat-file storage | — (never imported; read/written only by `core.rbac`) | No Python files. Only `db_rules.json` and `db_users.json`. No temporary files (atomic writes use `tempfile` + `os.replace`). |
 | `logs/`   | Destination for `ChitraguptLogger` rotating files | — (never imported; written only by `core.logger`) | No Python files. Only `chitragupt.log` and its rotated backups. Entire directory is gitignored. |
 | `tests/`  | Pytest test suite mirroring `bot/`, `core/`, and `sdk/` | everything | No application code. No fixtures that mutate `data/` files on disk. |
@@ -73,6 +73,7 @@ core/  ──✗──▶  bot/       (NEVER: core must not know about the bot l
 core/  ──✗──▶  sdk/       (NEVER: core must not depend on generated SDK)
 bot/   ──✓──▶  core/      (OK: handlers use RBAC, identity, logger)
 bot/   ──✓──▶  config     (OK: needs BOT_TOKEN / BASE_URL)
+bot/   ──✓──▶  sdk/       (OK: uses async helpers and Pydantic models from sdk.client)
 sdk/   ──✗──▶  bot/       (NEVER: SDK is self-contained)
 sdk/   ──✗──▶  core/      (NEVER: SDK is self-contained)
 ```
@@ -94,9 +95,9 @@ These directories must **never** appear in import paths, structure diagrams, or 
 ### Anti-Patterns (God Object Prevention)
 | Violation | Rule |
 |-----------|------|
-| A single file in `bot/` that handles commands, callbacks, polling, **and** Telegram API calls | Split into `telegram.py` (API), `handlers.py` (commands), `callbacks.py` (buttons), `dispatcher.py` (routing + loop) |
-| `core/rbac.py` making HTTP calls to Telegram | `core/` must be pure logic — move API calls to `bot/` |
-| `sdk/client.py` containing permission checks or handler routing | `sdk/` is a generated wrapper only — business logic belongs in `bot/` or `core/` |
+| A single file in `bot/` that handles commands, callbacks, polling, **and** Telegram API calls | Split into `handlers.py` (commands), `callbacks.py` (buttons), `dispatcher.py` (routing + loop). API calls live in `sdk/client.py`. |
+| `core/rbac.py` making HTTP calls to Telegram | `core/` must be pure logic — move API calls to `sdk/` |
+| `sdk/client.py` containing permission checks or handler routing | `sdk/` is an API wrapper only — business logic belongs in `bot/` or `core/` |
 | `main.py` containing handler functions or raw dict parsing | `main.py` delegates exclusively to `bot.dispatcher.run()` |
 | Any `.py` file inside `data/` or `logs/` | These are storage-only directories — no executable code |
 
@@ -124,18 +125,20 @@ Always use this order when extracting the message object from an update dict.
 
 ## Bot Application Layer (`bot/`)
 
-### `bot/telegram.py` — Telegram API Helpers
-Low-level wrappers: `get_updates()`, `send_message()`, `answer_callback_query()`.
-All outbound calls go through this module — handlers never call `requests` directly
-(except `handle_kick` which calls the `kickChatMember` endpoint directly).
-
 ### `bot/handlers.py` — Command Handlers
 One function per slash-command (`handle_start`, `handle_help`, `handle_status`,
-`handle_stop`, `handle_kick`). Each checks permissions via `rbac.has_permission()`
-before executing any privileged action.
+`handle_stop`, `handle_kick`, `handle_clear`, `handle_metadata`). Each checks
+permissions via `rbac.has_permission()` before executing any privileged action.
+All Telegram API calls use the async helpers from `sdk.client` — handlers never
+call `requests` directly.
 
 ### `bot/callbacks.py` — Callback Query Handlers
 Processes inline-keyboard button presses (admin approval/rejection flow).
+
+### `bot/registry.py` — Command Registry
+Generic singleton registry (`CommandRegistry[Message]`) that maps slash-commands
+to handler functions, action slugs, and descriptions. Used by `dispatcher.py`
+for routing and by `handle_help` for building the inline-keyboard menu.
 
 ### `bot/dispatcher.py` — Update Router + Polling Loop
 - `process_update(rbac, update)` — routes each update to the correct handler.
@@ -184,8 +187,13 @@ Use strict type hints (`Optional`, `List`, `Dict`, `Union`) and `Field(alias=...
 Telegram's reserved keywords (e.g. `from` → `from_field`).
 
 ### `sdk/client.py`
-`ChitraguptClient` — one method per API endpoint. Accepts/returns Pydantic models.
+`ChitraguptClient` — one method per API endpoint (sync). Accepts/returns dicts.
 Raises `sdk.exceptions.APIException` for non-2xx responses.
+
+Also contains **module-level async free functions** (`send_message`, `get_updates`,
+`delete_message`, `delete_messages`, `answer_callback_query`, `get_file_info`,
+`download_file`, `make_request`) that wrap blocking I/O via `asyncio.to_thread`.
+These are the single API entry point for the entire `bot/` layer.
 
 ### `sdk/exceptions.py`
 `APIException(status_code, response_body)` — base exception with HTTP status code and

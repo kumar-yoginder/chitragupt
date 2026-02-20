@@ -25,6 +25,12 @@ logger = ChitraguptLogger.get_logger()
 # ── Conversation state: users awaiting image upload for /metadata ────────────
 _PENDING_METADATA: set[int] = set()
 
+# Canonical display order for /help inline buttons.
+_HELP_ORDER: tuple[str, ...] = (
+    "/start", "/help", "/status", "/clear",
+    "/metadata", "/kick", "/stop", "/exit",
+)
+
 
 @registry.register("/start", action="view_help",
                     description="Register and request access")
@@ -85,7 +91,11 @@ async def handle_help(rbac: RBAC, message: Message, user_id: int) -> None:
     logger.info("User invoked /help", extra={"user_id": user_id, "chat_id": chat_id, "command": "/help"})
 
     buttons: list[list[dict]] = []
-    for cmd, entry in registry.entries().items():
+    sorted_entries = sorted(
+        registry.entries().items(),
+        key=lambda item: _HELP_ORDER.index(item[0]) if item[0] in _HELP_ORDER else len(_HELP_ORDER),
+    )
+    for cmd, entry in sorted_entries:
         if rbac.has_permission(user_id, entry.action):
             buttons.append([{"text": f"{cmd} — {entry.description}", "callback_data": cmd}])
 
@@ -179,16 +189,37 @@ async def handle_kick(rbac: RBAC, message: Message, user_id: int) -> None:
 
 
 @registry.register("/clear", action="view_help",
-                    description="Clear chat history with the bot", needs_rbac=False)
-async def handle_clear(message: Message, user_id: int) -> None:
-    """Handle /clear — bulk-delete all messages from current down to 1.
+                    description="Clear chat history with the bot", needs_rbac=True)
+async def handle_clear(rbac: RBAC, message: Message, user_id: int) -> None:
+    """Handle /clear — bulk-delete recent messages in the chat.
 
-    Builds the full range of message IDs (current_msg_id → 1) and sends
-    them to Telegram's ``deleteMessages`` endpoint in batches of 100.
+    In private chats any user may clear their conversation with the bot.
+    In groups and supergroups the ``delete_msg`` RBAC action is required.
+
+    Builds the range of message IDs (current_msg_id → 1) and sends them
+    to Telegram's ``deleteMessages`` endpoint in batches of 100.
+
+    .. note::
+        Telegram only allows deleting messages sent within the last
+        48 hours.  Older messages are silently skipped by the API, so
+        the reported count is an **upper bound**.
     """
     chat_id = message.chat.id
     current_msg_id = message.message_id
-    logger.info("User invoked /clear", extra={"user_id": user_id, "chat_id": chat_id, "command": "/clear", "message_id": current_msg_id})
+    logger.info("User invoked /clear", extra={
+        "user_id": user_id, "chat_id": chat_id,
+        "command": "/clear", "message_id": current_msg_id,
+    })
+
+    # ── Group safety: require delete_msg permission outside private chats ──
+    if message.chat.type != "private":
+        if not rbac.has_permission(user_id, "delete_msg"):
+            logger.warning("Unauthorised /clear attempt", extra={
+                "user_id": user_id, "chat_id": chat_id,
+                "command": "/clear", "action": "delete_msg",
+            })
+            await send_message(chat_id, "⛔ You do not have permission to clear messages.")
+            return
 
     if not current_msg_id:
         await send_message(chat_id, "❌ Could not determine message range.")
@@ -199,8 +230,17 @@ async def handle_clear(message: Message, user_id: int) -> None:
 
     deleted = await delete_messages(chat_id, msg_ids)
 
-    logger.info("Cleared messages", extra={"user_id": user_id, "chat_id": chat_id, "command": "/clear", "deleted_count": deleted})
-    await send_message(chat_id, f"🧹 Cleared {deleted} message(s).")
+    logger.info("Cleared messages", extra={
+        "user_id": user_id, "chat_id": chat_id,
+        "command": "/clear", "deleted_count": deleted,
+        "attempted": len(msg_ids),
+    })
+
+    # Send a brief confirmation, then self-delete it after 3 seconds.
+    confirm_id = await send_message(chat_id, f"🧹 Cleared ≈{deleted} message(s).")
+    if confirm_id:
+        await asyncio.sleep(3)
+        await delete_message(chat_id, confirm_id)
 
 
 # ── /metadata command & image processing ─────────────────────────────────────

@@ -1223,7 +1223,7 @@ class ChitraguptClient:
 # carries the ``BASE_URL`` / ``BOT_TOKEN`` values from :mod:`config`.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_sdk_logger = logging.getLogger("sdk.client")
+_sdk_logger = logging.getLogger("chitragupt.sdk")
 
 _default_client: ChitraguptClient | None = None
 
@@ -1270,11 +1270,14 @@ async def send_message(
     text: str,
     reply_markup: dict | None = None,
     parse_mode: str | None = None,
-) -> None:
+) -> int | None:
     """Send a text message to a Telegram chat.
 
     Optionally include an InlineKeyboardMarkup via *reply_markup* and/or
     a *parse_mode* (``"Markdown"``, ``"MarkdownV2"``, ``"HTML"``).
+
+    Returns:
+        The ``message_id`` of the sent message, or ``None`` on failure.
     """
     client = _get_default_client()
     _sdk_logger.debug("Sending message", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "text_preview": text[:80]})
@@ -1294,12 +1297,15 @@ async def send_message(
         data = response.json()
         if not data.get("ok"):
             _sdk_logger.warning("sendMessage Telegram error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "api_response": data})
-        else:
-            _sdk_logger.info("Message sent", extra={"chat_id": chat_id, "api_endpoint": "sendMessage"})
+            return None
+        _sdk_logger.info("Message sent", extra={"chat_id": chat_id, "api_endpoint": "sendMessage"})
+        return data.get("result", {}).get("message_id")
     except requests.HTTPError as exc:
         _sdk_logger.error("sendMessage HTTP error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "status_code": exc.response.status_code, "error": str(exc)})
+        return None
     except requests.RequestException as exc:
         _sdk_logger.error("sendMessage request error", extra={"chat_id": chat_id, "api_endpoint": "sendMessage", "error": str(exc)})
+        return None
 
 
 async def delete_message(chat_id: int, message_id: int) -> bool:
@@ -1322,8 +1328,18 @@ async def delete_messages(chat_id: int, message_ids: list[int]) -> int:
     """Bulk-delete messages using Telegram's ``deleteMessages`` endpoint.
 
     The API accepts 1–100 IDs per call.  If more than 100 are passed they
-    are sent in consecutive batches.  Returns the total number of messages
-    the API confirmed as deleted.
+    are sent in consecutive batches (newest first) with a short delay
+    between them to avoid hitting Telegram rate limits.
+
+    **Adaptive boundary logic:** IDs are expected in descending order
+    (newest → oldest).  When a full batch is rejected (typically because
+    it crosses the 48-hour deletion window), a binary-search fallback
+    narrows the batch to the largest prefix that Telegram still accepts,
+    then stops — all remaining IDs are guaranteed to be even older.
+
+    Returns the total count of IDs in accepted batches (upper bound —
+    Telegram may silently skip individual non-existent IDs within an
+    accepted batch).
     """
     if not message_ids:
         return 0
@@ -1331,24 +1347,77 @@ async def delete_messages(chat_id: int, message_ids: list[int]) -> int:
     client = _get_default_client()
     deleted = 0
     batch_size = 100
-    for start in range(0, len(message_ids), batch_size):
+
+    for idx, start in enumerate(range(0, len(message_ids), batch_size)):
+        if idx > 0:
+            await asyncio.sleep(0.05)
+
         batch = message_ids[start : start + batch_size]
-        try:
-            response = await make_request(
-                "post",
-                f"{client._base_url}/deleteMessages",
-                json={"chat_id": chat_id, "message_ids": batch},
-                timeout=10,
+        ok = await _try_delete_batch(client, chat_id, batch)
+
+        if ok:
+            deleted += len(batch)
+            _sdk_logger.debug("deleteMessages batch ok", extra={
+                "chat_id": chat_id, "api_endpoint": "deleteMessages",
+                "batch_index": idx, "batch_size": len(batch),
+            })
+        else:
+            # Batch failed — binary-search for the deletable prefix.
+            salvaged = await _bisect_deletable(client, chat_id, batch)
+            deleted += salvaged
+            _sdk_logger.info(
+                "deleteMessages hit boundary, salvaged via bisect",
+                extra={
+                    "chat_id": chat_id, "api_endpoint": "deleteMessages",
+                    "batch_index": idx, "batch_size": len(batch),
+                    "salvaged": salvaged,
+                },
             )
-            data = response.json()
-            if data.get("ok"):
-                deleted += len(batch)
-                _sdk_logger.debug("deleteMessages batch ok", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "batch_size": len(batch)})
-            else:
-                _sdk_logger.warning("deleteMessages batch failed", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "api_response": data})
-        except requests.RequestException as exc:
-            _sdk_logger.error("deleteMessages request error", extra={"chat_id": chat_id, "api_endpoint": "deleteMessages", "error": str(exc)})
+            # Everything after this batch is older — stop.
+            break
+
     return deleted
+
+
+async def _try_delete_batch(
+    client: ChitraguptClient, chat_id: int, batch: list[int],
+) -> bool:
+    """Attempt to delete *batch* via ``deleteMessages``.  Returns success flag."""
+    try:
+        response = await make_request(
+            "post",
+            f"{client._base_url}/deleteMessages",
+            json={"chat_id": chat_id, "message_ids": batch},
+            timeout=10,
+        )
+        data = response.json()
+        return bool(data.get("ok"))
+    except requests.RequestException as exc:
+        _sdk_logger.error("deleteMessages request error", extra={
+            "chat_id": chat_id, "api_endpoint": "deleteMessages",
+            "error": str(exc),
+        })
+        return False
+
+
+async def _bisect_deletable(
+    client: ChitraguptClient, chat_id: int, batch: list[int],
+) -> int:
+    """Binary-search within *batch* (descending IDs) for the largest
+    prefix that Telegram accepts, then delete it.
+
+    Returns the count of IDs successfully deleted (0 if none).
+    """
+    lo, hi = 0, len(batch)  # answer is in [0, len(batch)]
+
+    while lo < hi:
+        mid = (lo + hi + 1) // 2  # bias high → largest prefix
+        if await _try_delete_batch(client, chat_id, batch[:mid]):
+            lo = mid
+        else:
+            hi = mid - 1
+
+    return lo  # lo == number of IDs deleted (0 if even the first ID failed)
 
 
 async def answer_callback_query(callback_query_id: str, text: str | None = None) -> None:
