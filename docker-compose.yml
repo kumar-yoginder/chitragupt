@@ -12,6 +12,10 @@ services:
       - ./logs:/app/logs
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN        # entrypoint: chown on mounted dirs
+      - SETUID       # su-exec: drop to non-root user
+      - SETGID       # su-exec: drop to non-root group
     deploy:
       resources:
         limits:
