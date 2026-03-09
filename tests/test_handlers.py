@@ -779,6 +779,24 @@ class TestManageCallbacks:
         answer_text = mock_answer.call_args[0][1]
         assert "permission" in answer_text.lower()
 
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_set_level_invalid_level_rejected(self, mock_send, mock_answer, rbac) -> None:
+        from bot.callbacks import handle_callback_query
+
+        await rbac.set_user_level(999, 0, name="NewUser")
+
+        # Level 999 doesn't exist in roles
+        cb_dict = _make_callback_query(100, "set_level:999:999")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
+
+        # Level should remain unchanged
+        assert rbac.get_user_level(999) == 0
+        answer_text = mock_answer.call_args[0][1]
+        assert "Invalid" in answer_text
+
 
 # ── /barcode handler ─────────────────────────────────────────────────────────
 

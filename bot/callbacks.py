@@ -225,6 +225,12 @@ async def _handle_manage_callback(
             await answer_callback_query(cb_id, "❌ Invalid user or level.")
             return
 
+        # Validate that new_level corresponds to a known role (not SuperAdmin)
+        valid_levels = {lvl for lvl in rbac._rules_by_level if lvl < 100}
+        if new_level not in valid_levels:
+            await answer_callback_query(cb_id, "❌ Invalid role level.")
+            return
+
         old_level = rbac.get_user_level(target_id)
         await rbac.set_user_level(target_id, new_level)
         new_role = rbac.get_role_name(target_id)
