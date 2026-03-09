@@ -54,6 +54,11 @@ async def handle_callback_query(rbac: RBAC, callback_query: CallbackQuery, user_
         await _handle_approval_callback(rbac, cb_id, data, user_id, chat_id)
         return
 
+    # ── Group/user management flow ───────────────────────────────────────
+    if data.startswith("manage_group:") or data.startswith("manage_user:") or data.startswith("set_level:"):
+        await _handle_manage_callback(rbac, cb_id, data, user_id, chat_id)
+        return
+
     # ── /help menu command buttons ───────────────────────────────────────
     if data.startswith("/"):
         await _handle_command_callback(rbac, cb_id, data, callback_query, user_id)
@@ -128,3 +133,108 @@ async def _handle_approval_callback(
         await send_message(admin_chat_id, f"❌ User {target_id} has been rejected.")
         await send_message(target_id, "❌ Your access request has been rejected by an admin.")
         logger.info("Admin rejected user", extra={"admin_id": admin_id, "target_id": target_id, "action": "reject"})
+
+
+async def _handle_manage_callback(
+    rbac: RBAC, cb_id: str, data: str, admin_id: int, admin_chat_id: int
+) -> None:
+    """Process group/user management callbacks from the /manage flow.
+
+    Supports three callback_data prefixes:
+    - ``manage_group:<group_id>`` — list users in the selected group.
+    - ``manage_user:<user_id>`` — show level-change buttons for a user.
+    - ``set_level:<user_id>:<new_level>`` — change a user's level.
+    """
+    # Permission gate
+    if not rbac.has_permission(admin_id, "manage_users"):
+        logger.warning("Unauthorised manage callback", extra={"admin_id": admin_id, "action": "manage_users", "callback_data": data})
+        await answer_callback_query(cb_id, "⛔ You do not have permission to manage users.")
+        return
+
+    if data.startswith("manage_group:"):
+        # List users (non-group entries) for the admin to manage
+        await answer_callback_query(cb_id, "Loading users…")
+        buttons: list[list[dict]] = []
+        for uid_str, entry in rbac.users.items():
+            try:
+                uid = int(uid_str)
+            except ValueError:
+                continue
+            if uid >= 0:
+                name = entry.get("name", uid_str)
+                level = entry.get("level", 0)
+                role = rbac.get_role_name(uid)
+                buttons.append([{
+                    "text": f"👤 {name} — {role} (Lv {level})",
+                    "callback_data": f"manage_user:{uid_str}",
+                }])
+
+        if not buttons:
+            await send_message(admin_chat_id, "ℹ️ No users found.")
+            return
+
+        markup = {"inline_keyboard": buttons}
+        await send_message(admin_chat_id, "👥 Select a user to manage:", reply_markup=markup)
+
+    elif data.startswith("manage_user:"):
+        _, _, target_id_str = data.partition(":")
+        try:
+            target_id = int(target_id_str)
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid user data.")
+            return
+
+        await answer_callback_query(cb_id, "Loading user options…")
+        current_level = rbac.get_user_level(target_id)
+        role_name = rbac.get_role_name(target_id)
+        name = rbac.users.get(str(target_id), {}).get("name", str(target_id))
+
+        buttons = []
+        # Offer promote/demote options based on current level
+        if current_level < 80:
+            buttons.append([{"text": "⬆️ Promote to Admin (80)", "callback_data": f"set_level:{target_id}:80"}])
+        if current_level < 50:
+            buttons.append([{"text": "⬆️ Promote to Moderator (50)", "callback_data": f"set_level:{target_id}:50"}])
+        if current_level < 10:
+            buttons.append([{"text": "⬆️ Promote to Member (10)", "callback_data": f"set_level:{target_id}:10"}])
+        if current_level > 10:
+            buttons.append([{"text": "⬇️ Demote to Member (10)", "callback_data": f"set_level:{target_id}:10"}])
+        if current_level > 0 and current_level != 10:
+            buttons.append([{"text": "⬇️ Demote to Guest (0)", "callback_data": f"set_level:{target_id}:0"}])
+
+        if not buttons:
+            await send_message(admin_chat_id, f"ℹ️ No level changes available for {name}.")
+            return
+
+        markup = {"inline_keyboard": buttons}
+        await send_message(
+            admin_chat_id,
+            f"⚙️ Managing user: {name}\n• Current role: {role_name} (Level {current_level})\n\nChoose an action:",
+            reply_markup=markup,
+        )
+
+    elif data.startswith("set_level:"):
+        parts = data.split(":")
+        if len(parts) != 3:
+            await answer_callback_query(cb_id, "❌ Invalid data.")
+            return
+        try:
+            target_id = int(parts[1])
+            new_level = int(parts[2])
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid user or level.")
+            return
+
+        old_level = rbac.get_user_level(target_id)
+        await rbac.set_user_level(target_id, new_level)
+        new_role = rbac.get_role_name(target_id)
+        name = rbac.users.get(str(target_id), {}).get("name", str(target_id))
+
+        await answer_callback_query(cb_id, f"✅ {name} is now {new_role}.")
+        await send_message(admin_chat_id, f"✅ {name} has been changed from Level {old_level} to {new_role} (Level {new_level}).")
+        await send_message(target_id, f"🔔 Your role has been updated to {new_role} (Level {new_level}).")
+        logger.info("User level changed via /manage", extra={
+            "admin_id": admin_id, "target_id": target_id,
+            "old_level": old_level, "new_level": new_level,
+            "new_role": new_role,
+        })

@@ -623,3 +623,239 @@ class TestHandleClear:
         mock_send.assert_awaited_once()
         # delete_message should NOT be called because send_message returned None
         mock_del_one.assert_not_awaited()
+
+
+# ── RBAC.get_groups() ────────────────────────────────────────────────────────
+
+
+class TestGetGroups:
+    """Validate the RBAC.get_groups() method."""
+
+    def test_get_groups_empty(self, rbac) -> None:
+        """No negative IDs → no groups."""
+        assert rbac.get_groups() == {}
+
+    def test_get_groups_with_negative_ids(self, tmp_path) -> None:
+        """Negative user IDs should be returned as groups."""
+        rules = {
+            "roles": [
+                {"level": 0, "name": "Guest", "actions": ["view_help"]},
+                {"level": 100, "name": "SuperAdmin", "actions": ["*"]},
+            ]
+        }
+        users = {
+            "100": {"name": "Admin", "level": 100},
+            "-1001234": {"name": "TestGroup", "level": 0},
+            "-5001": {"name": "AnotherGroup", "level": 0},
+        }
+        rules_path = tmp_path / "db_rules.json"
+        users_path = tmp_path / "db_users.json"
+        rules_path.write_text(json.dumps(rules))
+        users_path.write_text(json.dumps(users))
+        r = RBAC(rules_path=str(rules_path), users_path=str(users_path))
+
+        groups = r.get_groups()
+        assert "-1001234" in groups
+        assert "-5001" in groups
+        assert "100" not in groups
+        assert len(groups) == 2
+
+
+# ── /manage handler ──────────────────────────────────────────────────────────
+
+
+class TestHandleManage:
+    """Validate /manage command and its callback flow."""
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_manage_no_permission(self, mock_send, rbac) -> None:
+        """Guest/Member users should be denied access to /manage."""
+        from bot.handlers import handle_manage
+
+        msg = _make_message(400, "/manage")
+        await handle_manage(rbac, msg, 400)
+
+        text = mock_send.call_args[0][1]
+        assert "permission" in text.lower()
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_manage_no_groups(self, mock_send, rbac) -> None:
+        """Admin with permission but no groups → informational message."""
+        from bot.handlers import handle_manage
+
+        msg = _make_message(100, "/manage")
+        await handle_manage(rbac, msg, 100)
+
+        text = mock_send.call_args[0][1]
+        assert "No groups" in text
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_manage_shows_groups(self, mock_send, rbac) -> None:
+        """Admin sees inline keyboard of groups."""
+        from bot.handlers import handle_manage
+
+        # Add a group entry
+        await rbac.set_user_level(-1001234, 0, name="TestGroup")
+
+        msg = _make_message(100, "/manage")
+        await handle_manage(rbac, msg, 100)
+
+        call_args = mock_send.call_args
+        assert "reply_markup" in call_args[1]
+        markup = call_args[1]["reply_markup"]
+        button_data = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+        assert any("manage_group:" in d for d in button_data)
+
+
+# ── Manage callback flow ────────────────────────────────────────────────────
+
+
+class TestManageCallbacks:
+    """Validate the group/user management callback flow."""
+
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_manage_group_lists_users(self, mock_send, mock_answer, rbac) -> None:
+        from bot.callbacks import handle_callback_query
+
+        await rbac.set_user_level(-1001234, 0, name="TestGroup")
+
+        cb_dict = _make_callback_query(100, "manage_group:-1001234")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
+
+        # Should list users
+        call_args = mock_send.call_args
+        assert "reply_markup" in call_args[1]
+        markup = call_args[1]["reply_markup"]
+        button_data = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+        assert any("manage_user:" in d for d in button_data)
+
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_manage_user_shows_options(self, mock_send, mock_answer, rbac) -> None:
+        from bot.callbacks import handle_callback_query
+
+        cb_dict = _make_callback_query(100, "manage_user:400")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
+
+        # Should show promote/demote buttons
+        call_args = mock_send.call_args
+        assert "reply_markup" in call_args[1]
+        text = call_args[0][1]
+        assert "Managing user" in text
+
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_set_level_changes_user(self, mock_send, mock_answer, rbac) -> None:
+        from bot.callbacks import handle_callback_query
+
+        await rbac.set_user_level(999, 0, name="NewUser")
+
+        cb_dict = _make_callback_query(100, "set_level:999:50")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 100)
+
+        assert rbac.get_user_level(999) == 50
+        mock_answer.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("bot.callbacks.answer_callback_query", new_callable=AsyncMock)
+    @patch("bot.callbacks.send_message", new_callable=AsyncMock)
+    async def test_non_admin_cannot_manage(self, mock_send, mock_answer, rbac) -> None:
+        from bot.callbacks import handle_callback_query
+
+        cb_dict = _make_callback_query(400, "manage_group:-1001234")["callback_query"]
+        cb = CallbackQuery.model_validate(cb_dict)
+        await handle_callback_query(rbac, cb, 400)
+
+        answer_text = mock_answer.call_args[0][1]
+        assert "permission" in answer_text.lower()
+
+
+# ── /barcode handler ─────────────────────────────────────────────────────────
+
+
+class TestHandleBarcode:
+    """Validate /barcode command — input validation and image generation."""
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_barcode_no_argument(self, mock_send, rbac) -> None:
+        from bot.handlers import handle_barcode
+
+        msg = _make_message(400, "/barcode")
+        await handle_barcode(rbac, msg, 400)
+
+        text = mock_send.call_args[0][1]
+        assert "Usage" in text
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_message", new_callable=AsyncMock)
+    async def test_barcode_non_integer(self, mock_send, rbac) -> None:
+        from bot.handlers import handle_barcode
+
+        msg = _make_message(400, "/barcode abc")
+        await handle_barcode(rbac, msg, 400)
+
+        text = mock_send.call_args[0][1]
+        assert "Input must be an integer" in text
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_photo", new_callable=AsyncMock, return_value=1)
+    async def test_barcode_valid_integer(self, mock_photo, rbac) -> None:
+        from bot.handlers import handle_barcode
+
+        msg = _make_message(400, "/barcode 12345")
+        await handle_barcode(rbac, msg, 400)
+
+        mock_photo.assert_awaited_once()
+        call_args = mock_photo.call_args
+        assert call_args[0][0] == 1000  # chat_id
+        assert isinstance(call_args[0][1], bytes)  # image_bytes
+        assert len(call_args[0][1]) > 0
+
+    @pytest.mark.asyncio
+    @patch("bot.handlers.send_photo", new_callable=AsyncMock, return_value=1)
+    async def test_barcode_large_number(self, mock_photo, rbac) -> None:
+        from bot.handlers import handle_barcode
+
+        msg = _make_message(400, "/barcode 9999999999999")
+        await handle_barcode(rbac, msg, 400)
+
+        mock_photo.assert_awaited_once()
+
+
+# ── Barcode utility tests ───────────────────────────────────────────────────
+
+
+class TestBarcodeUtility:
+    """Validate core.utils.generate_barcode directly."""
+
+    def test_generate_barcode_valid(self) -> None:
+        from core.utils import generate_barcode
+        result = generate_barcode("12345")
+        assert isinstance(result, bytes)
+        assert len(result) > 0
+
+    def test_generate_barcode_non_digit(self) -> None:
+        from core.utils import generate_barcode
+        with pytest.raises(ValueError, match="Input must be an integer"):
+            generate_barcode("abc")
+
+    def test_generate_barcode_empty(self) -> None:
+        from core.utils import generate_barcode
+        with pytest.raises(ValueError, match="Input must be an integer"):
+            generate_barcode("")
+
+    def test_generate_barcode_mixed(self) -> None:
+        from core.utils import generate_barcode
+        with pytest.raises(ValueError, match="Input must be an integer"):
+            generate_barcode("123abc")

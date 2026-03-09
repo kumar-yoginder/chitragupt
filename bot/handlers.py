@@ -18,7 +18,7 @@ from core.rbac import RBAC, USER_META_KEYS
 from bot.registry import registry
 from sdk.client import (
     delete_message, delete_messages, download_file,
-    get_file_info, make_request, send_message,
+    get_file_info, make_request, send_message, send_photo,
 )
 
 logger = ChitraguptLogger.get_logger()
@@ -29,7 +29,8 @@ _PENDING_METADATA: set[int] = set()
 # Canonical display order for /help inline buttons.
 _HELP_ORDER: tuple[str, ...] = (
     "/start", "/help", "/status", "/clear",
-    "/metadata", "/kick", "/stop", "/exit",
+    "/metadata", "/kick", "/manage", "/barcode",
+    "/stop", "/exit",
 )
 
 
@@ -483,3 +484,75 @@ def _extract_user_metadata(entity: User | Chat | None) -> dict:
         if val is not None:
             meta[key] = val
     return meta
+
+
+# ── /manage command & group/user management ──────────────────────────────────
+
+
+@registry.register("/manage", action="manage_users",
+                    description="Manage users and groups")
+async def handle_manage(rbac: RBAC, message: Message, user_id: int) -> None:
+    """Handle /manage — present an inline keyboard of known groups.
+
+    Requires the ``manage_users`` permission.  If no groups are registered
+    the admin is informed.  Otherwise an inline keyboard of groups is shown,
+    delegating further interaction to callback handlers.
+    """
+    chat_id = message.chat.id
+    logger.info("User invoked /manage", extra={"user_id": user_id, "chat_id": chat_id, "command": "/manage"})
+
+    if not rbac.has_permission(user_id, "manage_users"):
+        logger.warning("Unauthorised /manage attempt", extra={"user_id": user_id, "chat_id": chat_id, "command": "/manage", "action": "manage_users"})
+        await send_message(chat_id, "⛔ You do not have permission to manage users.")
+        return
+
+    groups = rbac.get_groups()
+    if not groups:
+        await send_message(chat_id, "ℹ️ No groups found. The bot hasn't been added to any groups yet.")
+        return
+
+    buttons: list[list[dict]] = []
+    for gid, entry in groups.items():
+        label = entry.get("name", gid)
+        buttons.append([{"text": f"📂 {label} ({gid})", "callback_data": f"manage_group:{gid}"}])
+
+    markup = {"inline_keyboard": buttons}
+    await send_message(chat_id, "📋 Select a group to manage:", reply_markup=markup)
+
+
+# ── /barcode command ─────────────────────────────────────────────────────────
+
+
+@registry.register("/barcode", action="view_help",
+                    description="Generate a barcode from an integer")
+async def handle_barcode(rbac: RBAC, message: Message, user_id: int) -> None:
+    """Handle /barcode <integer> — generate and send a Code128 barcode image.
+
+    Validates that the argument is a digit-only string and delegates
+    generation to :func:`core.utils.generate_barcode`.
+    """
+    chat_id = message.chat.id
+    logger.info("User invoked /barcode", extra={"user_id": user_id, "chat_id": chat_id, "command": "/barcode"})
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await send_message(chat_id, "Usage: /barcode <integer>")
+        return
+
+    data = parts[1].strip()
+    if not data.isdigit():
+        await send_message(chat_id, "❌ Input must be an integer.")
+        return
+
+    try:
+        from core.utils import generate_barcode
+        image_bytes = await asyncio.to_thread(generate_barcode, data)
+    except ValueError as exc:
+        await send_message(chat_id, f"❌ {exc}")
+        return
+    except Exception as exc:
+        logger.error("Barcode generation error", extra={"user_id": user_id, "chat_id": chat_id, "error": str(exc)})
+        await send_message(chat_id, "❌ Failed to generate barcode.")
+        return
+
+    await send_photo(chat_id, image_bytes, filename="barcode.png", caption=f"Barcode: {data}")
