@@ -37,11 +37,11 @@ from typing import (
 from core.rbac import RBAC
 from sdk.models import Message
 
-# ── Type variables ───────────────────────────────────────────────────────────
+# Type variables
 
 T = TypeVar("T")  # generic payload type
 
-# ── Handler protocol ─────────────────────────────────────────────────────────
+# Handler protocol
 
 @runtime_checkable
 class RBACHandler(Protocol):
@@ -59,7 +59,7 @@ class SimpleHandler(Protocol):
 HandlerFunc = RBACHandler | SimpleHandler
 
 
-# ── Registry entry ───────────────────────────────────────────────────────────
+# Registry entry
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class CommandEntry(Generic[T]):
@@ -75,7 +75,7 @@ class CommandEntry(Generic[T]):
     needs_rbac: bool = True   # whether dispatcher must pass RBAC
 
 
-# ── Generic registry ─────────────────────────────────────────────────────────
+# Generic registry
 
 class CommandRegistry(Generic[T]):
     """Singleton command registry, generic over the message type *T*.
@@ -102,7 +102,7 @@ class CommandRegistry(Generic[T]):
             cls._instance = inst
         return cls._instance  # type: ignore[return-value]
 
-    # ── decorator ────────────────────────────────────────────────────────
+    # decorator
 
     def register(
         self,
@@ -132,7 +132,7 @@ class CommandRegistry(Generic[T]):
             return func
         return decorator
 
-    # ── lookup helpers ───────────────────────────────────────────────────
+    # lookup helpers
 
     def get(self, command: str) -> CommandEntry[T] | None:
         """Return the entry for *command*, or ``None``."""

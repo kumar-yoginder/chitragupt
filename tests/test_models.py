@@ -35,7 +35,7 @@ from sdk.models import (
 from pydantic import ValidationError
 
 
-# ── Error ────────────────────────────────────────────────────────────────────
+# Error
 
 
 class TestErrorModel:
@@ -59,7 +59,7 @@ class TestErrorModel:
             Error(ok=False, error_code=400)  # missing description
 
 
-# ── User ─────────────────────────────────────────────────────────────────────
+# User
 
 
 class TestUserModel:
@@ -92,7 +92,7 @@ class TestUserModel:
         assert u.id == big_id
 
 
-# ── Update ───────────────────────────────────────────────────────────────────
+# Update
 
 
 class TestUpdateModel:
@@ -122,7 +122,7 @@ class TestUpdateModel:
         assert up.message.from_field.first_name == "Ada"
 
 
-# ── Chat ─────────────────────────────────────────────────────────────────────
+# Chat
 
 
 class TestChatModel:
@@ -138,7 +138,7 @@ class TestChatModel:
         assert c.id < 0
 
 
-# ── WebhookInfo ──────────────────────────────────────────────────────────────
+# WebhookInfo
 
 
 class TestWebhookInfoModel:
@@ -147,7 +147,7 @@ class TestWebhookInfoModel:
         assert wh.url == "https://example.com"
 
 
-# ── MessageEntity ────────────────────────────────────────────────────────────
+# MessageEntity
 
 
 class TestMessageEntityModel:
@@ -156,7 +156,7 @@ class TestMessageEntityModel:
         assert e.type == "bold"
 
 
-# ── PhotoSize ────────────────────────────────────────────────────────────────
+# PhotoSize
 
 
 class TestPhotoSizeModel:
@@ -165,7 +165,7 @@ class TestPhotoSizeModel:
         assert p.width == 100
 
 
-# ── BotCommand ───────────────────────────────────────────────────────────────
+# BotCommand
 
 
 class TestBotCommandModel:
@@ -174,7 +174,7 @@ class TestBotCommandModel:
         assert b.command == "help"
 
 
-# ── InlineKeyboardMarkup ────────────────────────────────────────────────────
+# InlineKeyboardMarkup
 
 
 class TestInlineKeyboardMarkup:
@@ -189,7 +189,7 @@ class TestInlineKeyboardMarkup:
         assert kb.inline_keyboard[0][0].text == "Click"
 
 
-# ── Serialization round-trip ─────────────────────────────────────────────────
+# Serialization round-trip
 
 
 class TestRoundTrip:

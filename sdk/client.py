@@ -1212,16 +1212,13 @@ class ChitraguptClient:
         return data
 
 
-# ── Module-level async helpers ───────────────────────────────────────────────
-#
-# Thin async wrappers around ``requests`` for polling updates, sending
+# Module-level async helpers
+# Thin async wrappers around requests for polling updates, sending
 # messages, and acknowledging callback queries.  All blocking I/O is
-# offloaded via :func:`asyncio.to_thread` so the event loop is never
-# blocked.
+# offloaded via asyncio.to_thread so the event loop is never blocked.
 #
-# A lazily-initialised module-level :class:`ChitraguptClient` instance
-# carries the ``BASE_URL`` / ``BOT_TOKEN`` values from :mod:`config`.
-# ─────────────────────────────────────────────────────────────────────────────
+# A lazily-initialised module-level ChitraguptClient instance
+# carries the BASE_URL / BOT_TOKEN values from config.
 
 _sdk_logger = logging.getLogger("chitragupt.sdk")
 
@@ -1438,7 +1435,7 @@ async def answer_callback_query(callback_query_id: str, text: str | None = None)
         _sdk_logger.error("answerCallbackQuery request error", extra={"api_endpoint": "answerCallbackQuery", "callback_query_id": callback_query_id, "error": str(exc)})
 
 
-# ── File download helpers ────────────────────────────────────────────────────
+# File download helpers
 
 
 async def get_file_info(file_id: str) -> File | None:
@@ -1528,4 +1525,85 @@ async def send_photo(
         return None
     except requests.RequestException as exc:
         _sdk_logger.error("sendPhoto request error", extra={"chat_id": chat_id, "api_endpoint": "sendPhoto", "error": str(exc)})
+        return None
+
+
+async def get_chat_info(chat_id: int) -> dict | None:
+    """Fetch chat information using getChat API.
+
+    Args:
+        chat_id: The chat ID to fetch info for.
+
+    Returns:
+        Dict with chat info (title, type, member_count, etc.) or None on failure.
+    """
+    client = _get_default_client()
+    try:
+        resp = await make_request(
+            "post",
+            f"{client._base_url}/getChat",
+            json={"chat_id": chat_id},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return data.get("result")
+        _sdk_logger.warning("getChat failed", extra={"chat_id": chat_id, "api_response": data})
+        return None
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        _sdk_logger.error("getChat request error", extra={"chat_id": chat_id, "error": str(exc)})
+        return None
+
+
+async def get_chat_administrators(chat_id: int) -> list[dict] | None:
+    """Fetch list of chat administrators.
+
+    Args:
+        chat_id: The chat ID.
+
+    Returns:
+        List of admin user objects, or None on failure.
+    """
+    client = _get_default_client()
+    try:
+        resp = await make_request(
+            "post",
+            f"{client._base_url}/getChatAdministrators",
+            json={"chat_id": chat_id},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return data.get("result", [])
+        _sdk_logger.warning("getChatAdministrators failed", extra={"chat_id": chat_id, "api_response": data})
+        return None
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        _sdk_logger.error("getChatAdministrators request error", extra={"chat_id": chat_id, "error": str(exc)})
+        return None
+
+
+async def get_chat_members_count(chat_id: int) -> int | None:
+    """Fetch total member count of a chat.
+
+    Args:
+        chat_id: The chat ID.
+
+    Returns:
+        Member count, or None on failure.
+    """
+    client = _get_default_client()
+    try:
+        resp = await make_request(
+            "post",
+            f"{client._base_url}/getChatMembersCount",
+            json={"chat_id": chat_id},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return data.get("result")
+        _sdk_logger.warning("getChatMembersCount failed", extra={"chat_id": chat_id, "api_response": data})
+        return None
+    except (requests.RequestException, json.JSONDecodeError) as exc:
+        _sdk_logger.error("getChatMembersCount request error", extra={"chat_id": chat_id, "error": str(exc)})
         return None

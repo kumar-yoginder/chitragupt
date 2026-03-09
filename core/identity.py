@@ -17,7 +17,7 @@ def get_identity(update: dict) -> int | None:
     Returns the sender_chat ID (a negative group ID) for Anonymous Admins and
     channels, or the from.id for regular users.
     """
-    # ── callback_query updates ───────────────────────────────────────────
+    # callback_query updates
     callback_query = update.get("callback_query")
     if callback_query:
         # Anonymous Admin: identity lives in the embedded message's sender_chat
@@ -34,7 +34,7 @@ def get_identity(update: dict) -> int | None:
             logger.info("Resolved callback user identity", extra={"identity": identity, "source": "from"})
             return identity
 
-    # ── message-based updates ────────────────────────────────────────────
+    # message-based updates
     message = (
         update.get("message")
         or update.get("edited_message")

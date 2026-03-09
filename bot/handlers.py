@@ -23,14 +23,14 @@ from sdk.client import (
 
 logger = ChitraguptLogger.get_logger()
 
-# ── Conversation state: users awaiting image upload for /metadata ────────────
+# Conversation state: users awaiting image upload for /metadata
 _PENDING_METADATA: set[int] = set()
 
 # Canonical display order for /help inline buttons.
 _HELP_ORDER: tuple[str, ...] = (
-    "/start", "/help", "/status", "/clear",
-    "/metadata", "/kick", "/manage", "/barcode",
-    "/stop", "/exit",
+    "/start", "/help", "/status",
+    "/metadata", "/kick", "/list", "/manage", "/barcode",
+    "/stop",
 )
 
 
@@ -46,7 +46,7 @@ async def handle_start(rbac: RBAC, message: Message, user_id: int) -> None:
     existing = rbac.users.get(str(user_id))
     if existing is not None:
         role_name = rbac.get_role_name(user_id)
-        await send_message(chat_id, f"👋 Welcome back, {display_name}! Your current role is *{role_name}*.")
+        await send_message(chat_id, f"👋 Welcome back, {display_name}! Your current role is _{role_name}_.")
         logger.info("Returning user invoked /start", extra={"user_id": user_id, "role": role_name, "command": "/start"})
         return
 
@@ -86,7 +86,7 @@ async def handle_start(rbac: RBAC, message: Message, user_id: int) -> None:
 
 
 @registry.register("/help", action="view_help",
-                    description="Show available commands")
+                    description="View available commands")
 async def handle_help(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /help — show commands the user is permitted to use as inline buttons."""
     chat_id = message.chat.id
@@ -106,11 +106,11 @@ async def handle_help(rbac: RBAC, message: Message, user_id: int) -> None:
         return
 
     markup = {"inline_keyboard": buttons}
-    await send_message(chat_id, "📖 Available commands (tap to use):", reply_markup=markup)
+    await send_message(chat_id, "📖 *Available commands (tap to use):*", reply_markup=markup)
 
 
 @registry.register("/status", action="view_help",
-                    description="View your rank and permissions")
+                    description="View your role and permissions")
 async def handle_status(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /status — show the user's rank level and permissions."""
     chat_id = message.chat.id
@@ -123,7 +123,7 @@ async def handle_status(rbac: RBAC, message: Message, user_id: int) -> None:
 
     await send_message(
         chat_id,
-        f"📊 Your status:\n"
+        f"📊 *Your Status:*\n"
         f"• Role: {role_name}\n"
         f"• Level: {level}\n"
         f"• Permissions: {actions_str}",
@@ -132,17 +132,15 @@ async def handle_status(rbac: RBAC, message: Message, user_id: int) -> None:
 
 @registry.register("/stop", action="view_help",
                     description="End your session", needs_rbac=False)
-@registry.register("/exit", action="view_help",
-                    description="End your session", needs_rbac=False)
 async def handle_stop(message: Message, user_id: int) -> None:
-    """Handle /stop and /exit — session termination."""
+    """Handle /stop — session termination."""
     chat_id = message.chat.id
-    logger.info("User invoked /stop or /exit", extra={"user_id": user_id, "chat_id": chat_id, "command": "/stop"})
+    logger.info("User invoked /stop", extra={"user_id": user_id, "chat_id": chat_id, "command": "/stop"})
     await send_message(chat_id, "👋 Session ended. Use /start to begin again.")
 
 
 @registry.register("/kick", action="kick_user",
-                    description="Kick a user from the chat")
+                    description="Remove a user from the chat")
 async def handle_kick(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle the /kick command.
 
@@ -154,7 +152,7 @@ async def handle_kick(rbac: RBAC, message: Message, user_id: int) -> None:
 
     if not rbac.has_permission(user_id, "kick_user"):
         logger.warning("Unauthorised /kick attempt", extra={"user_id": user_id, "chat_id": chat_id, "command": "/kick", "action": "kick_user"})
-        await send_message(chat_id, "⛔ You do not have permission to kick users.")
+        await send_message(chat_id, "⛔ You do not have permission to remove users.")
         return
 
     parts = (message.text or "").split()
@@ -213,14 +211,14 @@ async def handle_clear(rbac: RBAC, message: Message, user_id: int) -> None:
         "command": "/clear", "message_id": current_msg_id,
     })
 
-    # ── Group safety: require delete_msg permission outside private chats ──
+    # Group safety: require delete_msg permission outside private chats
     if message.chat.type != "private":
         if not rbac.has_permission(user_id, "delete_msg"):
             logger.warning("Unauthorised /clear attempt", extra={
                 "user_id": user_id, "chat_id": chat_id,
                 "command": "/clear", "action": "delete_msg",
             })
-            await send_message(chat_id, "⛔ You do not have permission to clear messages.")
+            await send_message(chat_id, "⛔ You do not have permission to clear messages in groups.")
             return
 
     if not current_msg_id:
@@ -245,7 +243,7 @@ async def handle_clear(rbac: RBAC, message: Message, user_id: int) -> None:
         await delete_message(chat_id, confirm_id)
 
 
-# ── /metadata command & image processing ─────────────────────────────────────
+# /metadata command & image processing
 
 
 class ExifToolRunner:
@@ -371,7 +369,7 @@ def _resolve_file_id(message: Message) -> tuple[str | None, bool]:
 
 
 @registry.register("/metadata", action="extract_metadata",
-                    description="Extract EXIF metadata from an image")
+                    description="Extract image metadata")
 async def handle_metadata(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /metadata — prompt the user to upload an image for EXIF extraction."""
     chat_id = message.chat.id
@@ -379,7 +377,7 @@ async def handle_metadata(rbac: RBAC, message: Message, user_id: int) -> None:
 
     if not rbac.has_permission(user_id, "extract_metadata"):
         logger.warning("Unauthorised /metadata attempt", extra={"user_id": user_id, "chat_id": chat_id, "command": "/metadata", "action": "extract_metadata"})
-        await send_message(chat_id, "⛔ You do not have permission to extract metadata.")
+        await send_message(chat_id, "⛔ You do not have permission to extract image metadata.")
         return
 
     _PENDING_METADATA.add(user_id)
@@ -410,7 +408,7 @@ async def handle_metadata_upload(rbac: RBAC, message: Message, user_id: int) -> 
         await send_message(chat_id, "⛔ You do not have permission to extract metadata.")
         return
 
-    # ── Resolve file_id via SDK models ────────────────────────────────────
+    # Resolve file_id via SDK models
     file_id, is_compressed = _resolve_file_id(message)
     if not file_id:
         await send_message(chat_id, "❌ Could not find a file in your message. Please try again with /metadata.")
@@ -486,16 +484,62 @@ def _extract_user_metadata(entity: User | Chat | None) -> dict:
     return meta
 
 
-# ── /manage command & group/user management ──────────────────────────────────
+# /list command — User listing with pagination
+
+
+async def send_user_list(chat_id: int, rbac: RBAC) -> None:
+    """Send a list of all users as clickable buttons."""
+    all_users = rbac.get_all_users()
+    total_users = len(all_users)
+    
+    if total_users == 0:
+        await send_message(chat_id, "📋 No users registered yet.")
+        return
+    
+    # Build inline keyboard with user buttons
+    buttons: list[list[dict]] = []
+    
+    for uid, udata in all_users:
+        username = udata.get("username", udata.get("name", str(uid)))
+        level = udata.get("level", 0)
+        role_name = rbac.get_role_name(uid)
+        buttons.append([{
+            "text": f"👤 {username} — {role_name} (Lv {level})",
+            "callback_data": f"user_menu:{uid}"
+        }])
+    
+    await send_message(
+        chat_id,
+        f"📋 *All Users* (Total: {total_users})\n\nSelect a user to change level:",
+        reply_markup={"inline_keyboard": buttons}
+    )
+
+
+@registry.register("/list", action="manage_users",
+                    description="View and manage all users")
+async def handle_list(rbac: RBAC, message: Message, user_id: int) -> None:
+    """Handle /list — show all users as clickable buttons for level management."""
+    chat_id = message.chat.id
+    logger.info("User invoked /list", extra={"user_id": user_id, "chat_id": chat_id, "command": "/list"})
+
+    if not rbac.has_permission(user_id, "manage_users"):
+        logger.warning("Unauthorised /list attempt", extra={"user_id": user_id, "chat_id": chat_id, "command": "/list", "action": "manage_users"})
+        await send_message(chat_id, "⛔ You do not have permission to view users.")
+        return
+    
+    await send_user_list(chat_id, rbac)
+
+
+# /manage command & group/user management
 
 
 @registry.register("/manage", action="manage_users",
-                    description="Manage users and groups")
+                    description="Manage chat groups")
 async def handle_manage(rbac: RBAC, message: Message, user_id: int) -> None:
-    """Handle /manage — present an inline keyboard of known groups.
+    """Handle /manage — present an inline keyboard of known managed chats.
 
-    Requires the ``manage_users`` permission.  If no groups are registered
-    the admin is informed.  Otherwise an inline keyboard of groups is shown,
+    Requires the ``manage_users`` permission.  If no chats are registered
+    the admin is informed.  Otherwise an inline keyboard of chats is shown,
     delegating further interaction to callback handlers.
     """
     chat_id = message.chat.id
@@ -503,28 +547,45 @@ async def handle_manage(rbac: RBAC, message: Message, user_id: int) -> None:
 
     if not rbac.has_permission(user_id, "manage_users"):
         logger.warning("Unauthorised /manage attempt", extra={"user_id": user_id, "chat_id": chat_id, "command": "/manage", "action": "manage_users"})
-        await send_message(chat_id, "⛔ You do not have permission to manage users.")
+        await send_message(chat_id, "⛔ You do not have permission to manage chat groups.")
         return
 
-    groups = rbac.get_groups()
-    if not groups:
-        await send_message(chat_id, "ℹ️ No groups found. The bot hasn't been added to any groups yet.")
+    managed_chats = rbac.get_managed_chats()
+    if not managed_chats:
+        await send_message(
+            chat_id,
+            "❌ *No groups or channels found.*\n\n"
+            "The bot hasn't been added to any group or channel yet.\n\n"
+            "*To add the bot:*\n"
+            "1️⃣ Add bot to a group/channel\n"
+            "2️⃣ Make it an admin (if required)\n"
+            "3️⃣ Use /manage to see it listed here"
+        )
         return
 
+    # Build buttons for all managed chats
     buttons: list[list[dict]] = []
-    for gid, entry in groups.items():
-        label = entry.get("name", gid)
-        buttons.append([{"text": f"📂 {label} ({gid})", "callback_data": f"manage_group:{gid}"}])
+    for chat in managed_chats:
+        chat_icon = "👥" if chat.get("type") in ["group", "supergroup"] else "📢"
+        chat_title = chat.get("title", f"Chat {chat['id']}")
+        buttons.append([{
+            "text": f"{chat_icon} {chat_title}",
+            "callback_data": f"manage_chat:{chat['id']}"
+        }])
 
     markup = {"inline_keyboard": buttons}
-    await send_message(chat_id, "📋 Select a group to manage:", reply_markup=markup)
+    await send_message(
+        chat_id,
+        f"📊 *Managed Groups & Channels* ({len(managed_chats)} total):\n\nSelect a chat to manage:",
+        reply_markup=markup
+    )
 
 
-# ── /barcode command ─────────────────────────────────────────────────────────
+# /barcode command
 
 
-@registry.register("/barcode", action="view_help",
-                    description="Generate a barcode from an integer")
+@registry.register("/barcode", action="generate_barcode",
+                    description="Create barcodes from numbers")
 async def handle_barcode(rbac: RBAC, message: Message, user_id: int) -> None:
     """Handle /barcode <integer> — generate and send a Code128 barcode image.
 

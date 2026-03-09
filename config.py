@@ -5,24 +5,24 @@ environment via ``python-dotenv``.  All values are resolved at import time
 so other modules can ``from config import …`` without repeated lookups.
 """
 
-# ── stdlib ───────────────────────────────────────────────────────────────────
+# stdlib
 import os
 import shutil
 
-# ── third-party ──────────────────────────────────────────────────────────────
+# third-party
 from dotenv import load_dotenv
 
-# ── core ─────────────────────────────────────────────────────────────────────
+# core
 from core.logger import ChitraguptLogger
 
-# ── Environment bootstrap ────────────────────────────────────────────────────
+# Environment bootstrap
 load_dotenv()
 
-# ── Logger (used for startup diagnostics at the bottom of this module) ───────
+# Logger (used for startup diagnostics at the bottom of this module)
 logger = ChitraguptLogger.get_logger()
 
 
-# ── Helper functions (private) ───────────────────────────────────────────────
+# Helper functions (private)
 
 
 def _parse_super_admins(raw: str | None) -> list[int]:
@@ -71,7 +71,7 @@ def _resolve_exiftool_path() -> str:
     return "exiftool"
 
 
-# ── Public constants ─────────────────────────────────────────────────────────
+# Public constants
 
 BOT_TOKEN: str | None = os.environ.get("BOT_TOKEN")
 BASE_URL: str = f"https://api.telegram.org/bot{BOT_TOKEN or ''}"
@@ -79,7 +79,7 @@ SUPER_ADMINS: list[int] = _parse_super_admins(os.environ.get("SUPER_ADMINS"))
 EXIFTOOL_PATH: str = _resolve_exiftool_path()
 
 
-# ── Startup diagnostics ─────────────────────────────────────────────────────
+# Startup diagnostics
 
 if BOT_TOKEN:
     logger.info("Config loaded — BOT_TOKEN is set, BASE_URL ready")

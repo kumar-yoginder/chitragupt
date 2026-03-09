@@ -13,7 +13,7 @@ from core.rbac import RBAC
 from sdk.models import CallbackQuery, Chat, Message, User
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
+# Fixtures
 
 
 @pytest.fixture()
@@ -86,7 +86,7 @@ def _make_callback_query(
     }
 
 
-# ── RBAC helper methods ─────────────────────────────────────────────────────
+# RBAC helper methods
 
 
 class TestRBACHelpers:
@@ -123,7 +123,7 @@ class TestRBACHelpers:
         assert r.get_superadmins() == []
 
 
-# ── /start handler ───────────────────────────────────────────────────────────
+# /start handler
 
 
 class TestHandleStart:
@@ -176,7 +176,7 @@ class TestHandleStart:
         assert "Welcome back" in first_call_text
 
 
-# ── /help handler ────────────────────────────────────────────────────────────
+# /help handler
 
 
 class TestHandleHelp:
@@ -212,7 +212,7 @@ class TestHandleHelp:
         assert any("/kick" in t for t in button_texts)
 
 
-# ── /status handler ──────────────────────────────────────────────────────────
+# /status handler
 
 
 class TestHandleStatus:
@@ -232,7 +232,7 @@ class TestHandleStatus:
         assert "kick_user" in text
 
 
-# ── /stop and /exit ──────────────────────────────────────────────────────────
+# /stop and /exit
 
 
 class TestHandleStop:
@@ -258,7 +258,7 @@ class TestHandleStop:
         assert mock_send.called
 
 
-# ── Callback query (admin approval) ─────────────────────────────────────────
+# Callback query (admin approval)
 
 
 class TestCallbackApproval:
@@ -335,7 +335,7 @@ class TestCallbackApproval:
         assert "permission" in answer_text.lower()
 
 
-# ── process_update dispatch ──────────────────────────────────────────────────
+# process_update dispatch
 
 
 class TestProcessUpdate:
@@ -419,7 +419,7 @@ class TestProcessUpdate:
         mock_handler.assert_called_once()
 
 
-# ── Identity resolution for callback_query ───────────────────────────────────
+# Identity resolution for callback_query
 
 
 class TestIdentityCallbackQuery:
@@ -452,7 +452,7 @@ class TestIdentityCallbackQuery:
         assert get_identity(update) == -1001234
 
 
-# ── Rich metadata storage ───────────────────────────────────────────────────
+# Rich metadata storage
 
 
 class TestRichMetadata:
@@ -495,7 +495,7 @@ class TestRichMetadata:
         assert rbac.users["888"]["username"] == "new_name"
 
 
-# ── asyncio.Lock safety ─────────────────────────────────────────────────────
+# asyncio.Lock safety
 
 
 class TestAsyncLock:
@@ -520,7 +520,7 @@ class TestAsyncLock:
             assert str(i) in on_disk
 
 
-# ── /clear command ───────────────────────────────────────────────────────────
+# /clear command
 
 
 def _make_clear_message(
@@ -625,7 +625,7 @@ class TestHandleClear:
         mock_del_one.assert_not_awaited()
 
 
-# ── RBAC.get_groups() ────────────────────────────────────────────────────────
+# RBAC.get_groups()
 
 
 class TestGetGroups:
@@ -661,7 +661,7 @@ class TestGetGroups:
         assert len(groups) == 2
 
 
-# ── /manage handler ──────────────────────────────────────────────────────────
+# /manage handler
 
 
 class TestHandleManage:
@@ -710,7 +710,7 @@ class TestHandleManage:
         assert any("manage_group:" in d for d in button_data)
 
 
-# ── Manage callback flow ────────────────────────────────────────────────────
+# Manage callback flow
 
 
 class TestManageCallbacks:
@@ -798,7 +798,7 @@ class TestManageCallbacks:
         assert "Invalid" in answer_text
 
 
-# ── /barcode handler ─────────────────────────────────────────────────────────
+# /barcode handler
 
 
 class TestHandleBarcode:
@@ -851,7 +851,7 @@ class TestHandleBarcode:
         mock_photo.assert_awaited_once()
 
 
-# ── Barcode utility tests ───────────────────────────────────────────────────
+# Barcode utility tests
 
 
 class TestBarcodeUtility:

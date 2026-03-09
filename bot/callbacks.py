@@ -49,17 +49,20 @@ async def handle_callback_query(rbac: RBAC, callback_query: CallbackQuery, user_
 
     logger.info("Callback query received", extra={"user_id": user_id, "chat_id": chat_id, "callback_data": data})
 
-    # ── Approval / rejection flow (SuperAdmin buttons) ───────────────────
+    # Approval / rejection flow (SuperAdmin buttons)
     if ":" in data and data.split(":")[0] in ("approve_member", "promote_mod", "reject"):
         await _handle_approval_callback(rbac, cb_id, data, user_id, chat_id)
         return
 
-    # ── Group/user management flow ───────────────────────────────────────
-    if data.startswith("manage_group:") or data.startswith("manage_user:") or data.startswith("set_level:"):
+    # Group/user management flow
+    if (data.startswith("manage_group:") or data.startswith("manage_user:") or 
+        data.startswith("manage_chat:") or data.startswith("set_level:") or
+        data.startswith("list_users:") or data.startswith("user_menu:") or
+        data.startswith("change_level:") or data == "refresh_list"):
         await _handle_manage_callback(rbac, cb_id, data, user_id, chat_id)
         return
 
-    # ── /help menu command buttons ───────────────────────────────────────
+    # /help menu command buttons
     if data.startswith("/"):
         await _handle_command_callback(rbac, cb_id, data, callback_query, user_id)
         return
@@ -108,10 +111,9 @@ async def _handle_approval_callback(
         await answer_callback_query(cb_id, "❌ Invalid user data.")
         return
 
-    # Permission gate — only users with manage_users (or wildcard) may act
     if not rbac.has_permission(admin_id, "manage_users"):
         logger.warning("Unauthorised approval attempt", extra={"admin_id": admin_id, "action": "manage_users", "callback_data": data})
-        await answer_callback_query(cb_id, "⛔ You do not have permission to manage users.")
+        await answer_callback_query(cb_id, "⛔ You do not have permission to approve users.")
         return
 
     if action == "approve_member":
@@ -138,11 +140,14 @@ async def _handle_approval_callback(
 async def _handle_manage_callback(
     rbac: RBAC, cb_id: str, data: str, admin_id: int, admin_chat_id: int
 ) -> None:
-    """Process group/user management callbacks from the /manage flow.
+    """Process group/user management and pagination callbacks.
 
-    Supports three callback_data prefixes:
-    - ``manage_group:<group_id>`` — list users in the selected group.
-    - ``manage_user:<user_id>`` — show level-change buttons for a user.
+    Supports these callback_data prefixes:
+    - ``manage_chat:<chat_id>`` — show options for managing a specific chat.
+    - ``list_users:<page>`` — show paginated user list.
+    - ``user_menu:<user_id>`` — show user management options.
+    - ``manage_group:<group_id>`` — list users in the selected group (legacy).
+    - ``manage_user:<user_id>`` — show level-change buttons for a user (legacy).
     - ``set_level:<user_id>:<new_level>`` — change a user's level.
     """
     # Permission gate
@@ -151,7 +156,106 @@ async def _handle_manage_callback(
         await answer_callback_query(cb_id, "⛔ You do not have permission to manage users.")
         return
 
-    if data.startswith("manage_group:"):
+    if data.startswith("list_users:"):
+        # Pagination for user list
+        _, _, page_str = data.partition(":")
+        try:
+            page = int(page_str)
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid page.")
+            return
+        
+        await answer_callback_query(cb_id)
+        from bot.handlers import send_paginated_users
+        await send_paginated_users(admin_chat_id, rbac, page)
+
+    elif data.startswith("user_menu:"):
+        # Directly show level selection options for the user
+        _, _, target_id_str = data.partition(":")
+        try:
+            target_id = int(target_id_str)
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid user data.")
+            return
+
+        await answer_callback_query(cb_id)
+        current_level = rbac.get_user_level(target_id)
+        name = rbac.users.get(str(target_id), {}).get("name", str(target_id))
+        
+        buttons = [
+            [{"text": "🔴 Guest (0)", "callback_data": f"set_level:{target_id}:0"}],
+            [{"text": "🟢 Member (10)", "callback_data": f"set_level:{target_id}:10"}],
+            [{"text": "🟡 Moderator (50)", "callback_data": f"set_level:{target_id}:50"}],
+            [{"text": "🔵 Admin (80)", "callback_data": f"set_level:{target_id}:80"}],
+            [{"text": "⬅️ Back to Users", "callback_data": "refresh_list"}]
+        ]
+
+        markup = {"inline_keyboard": buttons}
+        await send_message(
+            admin_chat_id,
+            f"📊 *Select New Level for {name}*\n\n"
+            f"Current Level: {current_level}",
+            reply_markup=markup,
+        )
+
+    elif data.startswith("change_level:"):
+        # Legacy handler for change_level (kept for backward compatibility)
+        _, _, target_id_str = data.partition(":")
+        try:
+            target_id = int(target_id_str)
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid user data.")
+            return
+
+        await answer_callback_query(cb_id)
+        current_level = rbac.get_user_level(target_id)
+        
+        buttons = [
+            [{"text": "🔴 Guest (0)", "callback_data": f"set_level:{target_id}:0"}],
+            [{"text": "🟢 Member (10)", "callback_data": f"set_level:{target_id}:10"}],
+            [{"text": "🟡 Moderator (50)", "callback_data": f"set_level:{target_id}:50"}],
+            [{"text": "🔵 Admin (80)", "callback_data": f"set_level:{target_id}:80"}],
+            [{"text": "⬅️ Back", "callback_data": f"user_menu:{target_id}"}]
+        ]
+
+        markup = {"inline_keyboard": buttons}
+        await send_message(
+            admin_chat_id,
+            f"📊 *Select New Level* (Current: {current_level}):",
+            reply_markup=markup,
+        )
+
+    elif data.startswith("manage_chat:"):
+        # Show info about managed chat
+        _, _, chat_id_str = data.partition(":")
+        try:
+            chat_id = int(chat_id_str)
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid chat data.")
+            return
+
+        await answer_callback_query(cb_id)
+        chat_info = rbac.get_chat_info(chat_id)
+        if not chat_info:
+            await send_message(admin_chat_id, "❌ Chat information not found.")
+            return
+
+        text = (
+            f"📊 *Chat Information*\n\n"
+            f"• Title: {chat_info.get('title', 'Unknown')}\n"
+            f"• Type: {chat_info.get('type', 'unknown').upper()}\n"
+            f"• Chat ID: {chat_id}\n"
+        )
+
+        buttons = [
+            [{"text": "👥 Manage Users", "callback_data": "manage_group:users"}],
+            [{"text": "⬅️ Back", "callback_data": "manage:list:0"}]
+        ]
+
+        markup = {"inline_keyboard": buttons}
+        await send_message(admin_chat_id, text, reply_markup=markup)
+
+    elif data.startswith("manage_group:"):
         # List users (non-group entries) for the admin to manage
         await answer_callback_query(cb_id, "Loading users…")
         buttons: list[list[dict]] = []
@@ -244,3 +348,21 @@ async def _handle_manage_callback(
             "old_level": old_level, "new_level": new_level,
             "new_role": new_role,
         })
+    elif data == "refresh_list":
+        # Refresh user list
+        await answer_callback_query(cb_id)
+        from bot.handlers import send_user_list
+        await send_user_list(admin_chat_id, rbac)
+
+    elif data.startswith("list_users:"):
+        # Legacy pagination support
+        _, _, page_str = data.partition(":")
+        try:
+            page = int(page_str)
+        except ValueError:
+            await answer_callback_query(cb_id, "❌ Invalid page.")
+            return
+        
+        await answer_callback_query(cb_id)
+        from bot.handlers import send_user_list
+        await send_user_list(admin_chat_id, rbac)

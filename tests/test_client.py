@@ -13,7 +13,7 @@ from sdk.client import ChitraguptClient
 from sdk.exceptions import APIException
 
 
-# ── APIException ─────────────────────────────────────────────────────────────
+# APIException
 
 
 class TestAPIException:
@@ -35,7 +35,7 @@ class TestAPIException:
         assert issubclass(APIException, Exception)
 
 
-# ── ChitraguptClient construction ───────────────────────────────────────────
+# ChitraguptClient construction
 
 
 class TestClientInit:
@@ -54,7 +54,7 @@ class TestClientInit:
         assert c._timeout == 30
 
 
-# ── _post helper ─────────────────────────────────────────────────────────────
+# _post helper
 
 
 class TestPostHelper:
@@ -109,7 +109,7 @@ class TestPostHelper:
             c._post("getMe")
 
 
-# ── Endpoint methods ─────────────────────────────────────────────────────────
+# Endpoint methods
 
 
 class TestEndpointMethods:
