@@ -1483,3 +1483,49 @@ async def download_file(telegram_file_path: str) -> bytes:
     resp = await make_request("get", url, timeout=30)
     resp.raise_for_status()
     return resp.content
+
+
+async def send_photo(
+    chat_id: int,
+    photo_bytes: bytes,
+    filename: str = "image.png",
+    caption: str | None = None,
+) -> int | None:
+    """Send a photo to a Telegram chat using multipart upload.
+
+    Args:
+        chat_id: Target chat ID.
+        photo_bytes: Raw image bytes.
+        filename: Filename for the uploaded image.
+        caption: Optional caption text.
+
+    Returns:
+        The ``message_id`` of the sent message, or ``None`` on failure.
+    """
+    client = _get_default_client()
+    _sdk_logger.debug("Sending photo", extra={"chat_id": chat_id, "api_endpoint": "sendPhoto", "filename": filename})
+    data: dict = {"chat_id": str(chat_id)}
+    if caption is not None:
+        data["caption"] = caption
+    files = {"photo": (filename, photo_bytes, "image/png")}
+    try:
+        response = await asyncio.to_thread(
+            requests.post,
+            f"{client._base_url}/sendPhoto",
+            data=data,
+            files=files,
+            timeout=10,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            _sdk_logger.warning("sendPhoto Telegram error", extra={"chat_id": chat_id, "api_endpoint": "sendPhoto", "api_response": result})
+            return None
+        _sdk_logger.info("Photo sent", extra={"chat_id": chat_id, "api_endpoint": "sendPhoto"})
+        return result.get("result", {}).get("message_id")
+    except requests.HTTPError as exc:
+        _sdk_logger.error("sendPhoto HTTP error", extra={"chat_id": chat_id, "api_endpoint": "sendPhoto", "status_code": exc.response.status_code, "error": str(exc)})
+        return None
+    except requests.RequestException as exc:
+        _sdk_logger.error("sendPhoto request error", extra={"chat_id": chat_id, "api_endpoint": "sendPhoto", "error": str(exc)})
+        return None

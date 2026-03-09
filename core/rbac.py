@@ -149,6 +149,24 @@ class RBAC:
             return []
         return role.get("actions", [])
 
+    def get_groups(self) -> dict[str, dict]:
+        """Return unique groups/chats derived from the user registry.
+
+        Negative user IDs represent groups or channels where the bot is
+        active.  Returns a dict keyed by the string user-ID with the
+        corresponding entry value.
+        """
+        groups: dict[str, dict] = {}
+        for uid_str, entry in self.users.items():
+            try:
+                uid = int(uid_str)
+            except ValueError:
+                continue
+            if uid < 0:
+                groups[uid_str] = entry
+        logger.debug("Found groups", extra={"count": len(groups)})
+        return groups
+
     def get_superadmins(self) -> list[int]:
         """Return a list of user IDs whose level is 100 (SuperAdmin)."""
         admins: list[int] = []
